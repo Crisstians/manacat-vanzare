@@ -1,9 +1,12 @@
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { AuthProvider } from "../src/auth/AuthContext";
+import { useStayInApp } from "../src/kiosk/useStayInApp";
 import { colors } from "../src/theme";
 
 export default function RootLayout() {
+  useStayInApp();
+
   return (
     <AuthProvider>
       <StatusBar style="dark" />

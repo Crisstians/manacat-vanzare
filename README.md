@@ -82,6 +82,8 @@ APK: `https://github.com/Crisstians/manacat-vanzare/releases/download/v1.0.0/man
 
 Pe tabletă: permite instalarea din surse necunoscute, descarcă APK-ul, instalează. Nu trece prin Play Store.
 
+La deschiderea APK-ului, Android **fixează ecranul** (screen pinning): Home și Recente nu mai ies din app. Pentru a ieși, ține apăsate **Înapoi + Recente** (butonul pătrat). Prima dată apare un dialog de confirmare. În Expo Go (dev) fixarea nu e activă.
+
 Poți rula workflow-ul și manual din **Actions** → **Release APK** (fără tag nu creează Release, doar artifact).
 
 ## Ce nu facem

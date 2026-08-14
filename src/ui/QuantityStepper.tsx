@@ -8,6 +8,7 @@ type QuantityStepperProps = {
   kind: QuantityKind;
   unitLabel: string;
   disabled?: boolean;
+  max?: number;
 };
 
 export function QuantityStepper({
@@ -16,16 +17,22 @@ export function QuantityStepper({
   kind,
   unitLabel,
   disabled,
+  max,
 }: QuantityStepperProps) {
   const isPiece = kind === "piece";
 
   const bump = (delta: number) => {
     const current = Math.floor(Number(value.replace(",", ".")));
     const base = Number.isFinite(current) && current > 0 ? current : 1;
-    onChange(String(Math.max(1, base + delta)));
+    const next = base + delta;
+    const ceiling = max != null && Number.isFinite(max) ? Math.max(1, Math.floor(max)) : Number.POSITIVE_INFINITY;
+    onChange(String(Math.min(ceiling, Math.max(1, next))));
   };
 
   if (isPiece) {
+    const current = Math.floor(Number(value.replace(",", ".")));
+    const plusDisabled =
+      disabled || (max != null && Number.isFinite(max) && (Number.isFinite(current) ? current : 1) >= Math.floor(max));
     return (
       <View style={styles.stepper} accessibilityLabel="Cantitate">
         <Pressable
@@ -41,8 +48,8 @@ export function QuantityStepper({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Crește cantitatea"
-          style={[styles.stepBtn, disabled && styles.disabled]}
-          disabled={disabled}
+          style={[styles.stepBtn, plusDisabled && styles.disabled]}
+          disabled={plusDisabled}
           onPress={() => bump(1)}
         >
           <Text style={styles.stepBtnText}>+</Text>

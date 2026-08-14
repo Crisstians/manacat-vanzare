@@ -10,6 +10,7 @@ export type CatalogProduct = {
   price: number;
   image: string;
   images: string[];
+  stockByStore?: { storeId: string; storeName?: string; quantity: number }[];
 };
 
 export type ListProductsResponse = {

@@ -77,6 +77,8 @@ export type ProductLookup = {
   sku: string;
   name: string;
   unit: string;
+  storeStock: number;
+  otherStoreNames?: string[];
 };
 
 export type AuthSession = {

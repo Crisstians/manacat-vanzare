@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { searchProducts, type CatalogProduct } from "../api/productsApi";
 import { apiOrigin } from "../config";
+import { formatStockAmount, otherStockHint, otherStoreNamesWithStock, stockAtStore } from "../stock";
 import { colors, radius, touchMin, typeScale } from "../theme";
 import { displayUnit } from "../units";
 
@@ -24,6 +25,7 @@ type CatalogProductSearchProps = {
   onSelect: (product: CatalogProduct) => void;
   onResultsChange?: (items: CatalogProduct[]) => void;
   disabled?: boolean;
+  storeId?: string;
   children?: ReactNode;
 };
 
@@ -66,6 +68,7 @@ export function CatalogProductSearch({
   onSelect,
   onResultsChange,
   disabled,
+  storeId,
   children,
 }: CatalogProductSearchProps) {
   const abortRef = useRef<AbortController | null>(null);
@@ -158,6 +161,10 @@ export function CatalogProductSearch({
           {items.map((item, index) => {
             const title = catalogDisplayName(item);
             const thumb = catalogPrimaryImage(item);
+            const storeStock = storeId ? stockAtStore(item.stockByStore, storeId) : null;
+            const outOfStock = storeStock != null && storeStock <= 0;
+            const elsewhere =
+              outOfStock && storeId ? otherStockHint(otherStoreNamesWithStock(item.stockByStore, storeId)) : "";
             const meta = [
               item.sku ? `SKU ${item.sku}` : null,
               `#${item.productId}`,
@@ -169,8 +176,12 @@ export function CatalogProductSearch({
             return (
               <Pressable
                 key={item.productId}
-                style={[styles.resultRow, index > 0 && styles.resultRowBorder]}
-                disabled={disabled}
+                style={[
+                  styles.resultRow,
+                  index > 0 && styles.resultRowBorder,
+                  outOfStock && styles.resultRowDisabled,
+                ]}
+                disabled={disabled || outOfStock}
                 onPress={() => onSelect(item)}
               >
                 <View style={styles.thumb}>
@@ -187,6 +198,16 @@ export function CatalogProductSearch({
                   <Text style={styles.resultMeta} numberOfLines={1}>
                     {meta}
                   </Text>
+                  {storeStock != null ? (
+                    <Text
+                      style={[styles.resultStock, outOfStock && styles.resultStockOut]}
+                      numberOfLines={3}
+                    >
+                      {outOfStock
+                        ? `Fără stoc la acest magazin.${elsewhere}`
+                        : `Stoc magazin: ${formatStockAmount(storeStock, item.unit)}`}
+                    </Text>
+                  ) : null}
                 </View>
                 <Text style={styles.resultPrice}>
                   {formatPrice(item.price)}
@@ -297,5 +318,8 @@ const styles = StyleSheet.create({
   resultBody: { flex: 1, minWidth: 0 },
   resultTitle: { color: colors.text, fontSize: typeScale.body, fontWeight: "800" },
   resultMeta: { color: colors.muted, fontSize: 15, marginTop: 4 },
+  resultStock: { color: colors.successText, fontSize: 15, fontWeight: "700", marginTop: 4 },
+  resultStockOut: { color: colors.danger },
+  resultRowDisabled: { opacity: 0.55 },
   resultPrice: { color: colors.text, fontSize: 16, fontWeight: "700" },
 });

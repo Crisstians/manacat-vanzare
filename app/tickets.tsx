@@ -11,9 +11,9 @@ import {
 } from "react-native";
 import * as floorApi from "../src/api/floorApi";
 import type { CatalogProduct } from "../src/api/productsApi";
-import type { FloorTicket, FloorTicketEvent, FloorTicketSummary } from "../src/api/types";
+import type { FloorTicket, FloorTicketEvent, FloorTicketStatus, FloorTicketSummary } from "../src/api/types";
 import { useAuth } from "../src/auth/AuthContext";
-import { BarcodeScannerModal } from "../src/components/BarcodeScannerModal";
+import { BarcodeScannerModal, type ScannedBarcodeProduct } from "../src/components/BarcodeScannerModal";
 import { CatalogProductSearch } from "../src/components/CatalogProductSearch";
 import { ticketSocket } from "../src/realtime/ticketSocket";
 import { colors, radius, touchMin, typeScale } from "../src/theme";
@@ -21,6 +21,13 @@ import { Button } from "../src/ui/Button";
 import { EmptyHint } from "../src/ui/EmptyHint";
 import { ConnectionPill, StatusBanner } from "../src/ui/StatusBanner";
 import { QuantityStepper } from "../src/ui/QuantityStepper";
+import {
+  remainingStock,
+  stockAtStore,
+  stockLimitMessage,
+  otherStoreNamesWithStock,
+  ticketQtyForProduct,
+} from "../src/stock";
 import { displayUnit, inferUnitFromResults, parseQuantity, quantityKind } from "../src/units";
 
 function newClientItemId(): string {
@@ -32,6 +39,21 @@ function lookupCodeCandidates(raw: string): string[] {
   if (!code) return [];
   if (/^0\d{12}$/.test(code)) return [code, code.slice(1)];
   return [code];
+}
+
+async function resolveScannedProduct(raw: string): Promise<ScannedBarcodeProduct> {
+  const candidates = lookupCodeCandidates(raw.trim());
+  let lastError: unknown;
+  for (const candidate of candidates) {
+    try {
+      const looked = await floorApi.lookupProduct(candidate);
+      const name = looked.name.trim() || looked.sku.trim() || candidate;
+      return { code: candidate, name, unit: looked.unit };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Produsul nu a fost găsit");
 }
 
 function applyEvent(ticket: FloorTicket, event: FloorTicketEvent): FloorTicket {
@@ -88,6 +110,21 @@ function applyEvent(ticket: FloorTicket, event: FloorTicketEvent): FloorTicket {
   return { ...ticket, lastSeq: event.seq };
 }
 
+function isBoardTicket(status: FloorTicketStatus): boolean {
+  return status === "OPEN" || status === "READY";
+}
+
+function canEditItems(status: FloorTicketStatus): boolean {
+  return status === "OPEN";
+}
+
+function statusLabel(status: FloorTicketStatus): string {
+  if (status === "READY") return "La casă";
+  if (status === "COMPLETED") return "Predat";
+  if (status === "CANCELLED") return "Anulat";
+  return "În lucru";
+}
+
 function addedByLabel(item: { addedByStaffName: string; addedAtDepartmentName: string }): string {
   const who = item.addedByStaffName.trim();
   const where = item.addedAtDepartmentName.trim();
@@ -109,17 +146,23 @@ export default function TicketsScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [editQty, setEditQty] = useState("1");
+  const [editUnit, setEditUnit] = useState<string | null>(null);
+  const [editRemaining, setEditRemaining] = useState<number | null>(null);
+  const [editOtherStores, setEditOtherStores] = useState<string[]>([]);
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selected?.id ?? null;
 
   const loadList = useCallback(async () => {
     const all = await floorApi.listTickets();
-    setTickets(all.filter((ticket) => ticket.status === "OPEN"));
+    setTickets(all.filter((ticket) => isBoardTicket(ticket.status)));
   }, []);
 
   const dismissTicket = useCallback(() => {
     setSelected(null);
     setCustomerName("");
+    setEditingItemId(null);
     ticketSocket.setTicket(null);
   }, []);
 
@@ -137,7 +180,7 @@ export default function TicketsScreen() {
         void loadList();
         const leftBoard =
           event.type === "ticket.status_changed" &&
-          (event.payload as { to?: string }).to !== "OPEN";
+          !isBoardTicket(((event.payload as { to?: FloorTicketStatus }).to ?? "OPEN"));
         if (leftBoard && selectedIdRef.current === event.ticketId) {
           dismissTicket();
           return;
@@ -148,7 +191,7 @@ export default function TicketsScreen() {
         });
       },
       onResync: (ticket) => {
-        if (ticket.status !== "OPEN") {
+        if (!isBoardTicket(ticket.status)) {
           dismissTicket();
         } else {
           setSelected(ticket);
@@ -195,32 +238,49 @@ export default function TicketsScreen() {
 
   const addProduct = async (rawCode = code, unitHint?: string | null) => {
     if (!selected || !rawCode.trim()) return;
+    if (!canEditItems(selected.status)) {
+      setError("Biletul este la casă. Nu se mai pot adăuga produse.");
+      return;
+    }
     const candidates = lookupCodeCandidates(rawCode);
     setBusy(true);
     setError(null);
     try {
+      let lastError: unknown;
+      let looked: Awaited<ReturnType<typeof floorApi.lookupProduct>> | null = null;
       let resolvedCode = candidates[0] ?? rawCode.trim();
-      let unit = unitHint === null ? undefined : (unitHint ?? qtyUnit ?? undefined);
-      if (!unit) {
-        let lastError: unknown;
-        let looked: Awaited<ReturnType<typeof floorApi.lookupProduct>> | null = null;
-        for (const candidate of candidates) {
-          try {
-            looked = await floorApi.lookupProduct(candidate);
-            resolvedCode = candidate;
-            break;
-          } catch (err) {
-            lastError = err;
-          }
+      for (const candidate of candidates) {
+        try {
+          looked = await floorApi.lookupProduct(candidate);
+          resolvedCode = candidate;
+          break;
+        } catch (err) {
+          lastError = err;
         }
-        if (!looked) {
-          throw lastError instanceof Error ? lastError : new Error("Produsul nu a fost găsit");
-        }
-        unit = looked.unit;
       }
+      if (!looked) {
+        throw lastError instanceof Error ? lastError : new Error("Produsul nu a fost găsit");
+      }
+      const unit = unitHint || looked.unit;
       const parsed = parseQuantity(qty, unit ? quantityKind(unit) : "other");
       if (!parsed.ok) {
         setError(parsed.message);
+        return;
+      }
+      const remaining = remainingStock(
+        looked.storeStock,
+        ticketQtyForProduct(selected.items, looked.productId),
+      );
+      if (parsed.value > remaining + 1e-9) {
+        setError(
+          stockLimitMessage({
+            remaining,
+            storeStock: looked.storeStock,
+            productName: looked.name,
+            unit: looked.unit,
+            otherStoreNames: looked.otherStoreNames,
+          }),
+        );
         return;
       }
       const updated = await floorApi.addItem(selected.id, {
@@ -240,15 +300,35 @@ export default function TicketsScreen() {
     }
   };
 
-  const addFromScan = (scanned: string) => {
-    const data = scanned.trim();
+  const confirmScannedProduct = (product: ScannedBarcodeProduct) => {
     setScannerOpen(false);
-    if (!data) return;
-    setCode(data);
-    void addProduct(data, null);
+    setCode(product.code);
+    void addProduct(product.code, product.unit);
   };
 
   const addFromCatalog = (product: CatalogProduct) => {
+    if (!selected) return;
+    const storeId = session?.staff.storeId ?? device?.storeId ?? "";
+    const storeStock = stockAtStore(product.stockByStore, storeId);
+    const remaining = remainingStock(storeStock, ticketQtyForProduct(selected.items, product.productId));
+    const name = product.nameAlt.trim() || product.name.trim() || product.sku;
+    const parsed = parseQuantity(qty, quantityKind(product.unit));
+    if (!parsed.ok) {
+      setError(parsed.message);
+      return;
+    }
+    if (parsed.value > remaining + 1e-9) {
+      setError(
+        stockLimitMessage({
+          remaining,
+          storeStock,
+          productName: name,
+          unit: product.unit,
+          otherStoreNames: otherStoreNamesWithStock(product.stockByStore, storeId),
+        }),
+      );
+      return;
+    }
     void addProduct(String(product.productId), product.unit);
   };
 
@@ -283,23 +363,91 @@ export default function TicketsScreen() {
   };
 
   const confirmRemoveItem = (itemId: string, name: string) => {
-    if (!selected) return;
+    if (!selected || !canEditItems(selected.status)) return;
     Alert.alert("Șterge linia?", name, [
       { text: "Anulează", style: "cancel" },
       {
         text: "Șterge",
         style: "destructive",
         onPress: () => {
+          setEditingItemId((current) => (current === itemId ? null : current));
           void floorApi.removeItem(selected.id, itemId).then(setSelected);
         },
       },
     ]);
   };
 
-  const locked = selected?.status === "COMPLETED" || selected?.status === "CANCELLED";
+  const startEditQuantity = (item: FloorTicket["items"][number]) => {
+    if (!selected || !canEditItems(selected.status)) return;
+    setError(null);
+    setEditingItemId(item.id);
+    setEditQty(String(item.quantity));
+    setEditUnit("buc");
+    setEditRemaining(null);
+    setEditOtherStores([]);
+    void floorApi
+      .lookupProduct(String(item.productId))
+      .then((looked) => {
+        setEditUnit(looked.unit);
+        setEditRemaining(
+          remainingStock(looked.storeStock, ticketQtyForProduct(selected.items, item.productId, item.id)),
+        );
+        setEditOtherStores(looked.otherStoreNames ?? []);
+      })
+      .catch(() => {
+        /* rămâne stepper-ul pe bucăți */
+      });
+  };
+
+  const saveEditQuantity = async () => {
+    if (!selected || !editingItemId || !canEditItems(selected.status)) return;
+    const kind = editUnit ? quantityKind(editUnit) : Number.isInteger(Number(editQty.replace(",", "."))) ? "piece" : "other";
+    const parsed = parseQuantity(editQty, kind);
+    if (!parsed.ok) {
+      setError(parsed.message);
+      return;
+    }
+    if (editRemaining != null && parsed.value > editRemaining + 1e-9) {
+      setError(
+        stockLimitMessage({
+          remaining: editRemaining,
+          storeStock: editRemaining,
+          unit: editUnit ?? undefined,
+          otherStoreNames: editOtherStores,
+        }),
+      );
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await floorApi.updateItem(selected.id, editingItemId, parsed.value);
+      setSelected(updated);
+      setEditingItemId(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Nu s-a putut modifica cantitatea");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const locked = !selected || !canEditItems(selected.status);
+  const atCheckout = selected?.status === "READY";
   const isEmpty = (selected?.items.length ?? 0) === 0;
   const qtyKind = qtyUnit ? quantityKind(qtyUnit) : "other";
   const qtySuffix = qtyUnit ? displayUnit(qtyUnit) : "";
+  const editQtyKind = editUnit ? quantityKind(editUnit) : "other";
+  const editQtySuffix = editUnit ? displayUnit(editUnit) : "";
+
+  useEffect(() => {
+    setEditingItemId(null);
+  }, [selected?.id]);
+
+  useEffect(() => {
+    if (!locked) return;
+    setScannerOpen(false);
+    setEditingItemId(null);
+  }, [locked]);
 
   useEffect(() => {
     if (qtyKind !== "piece") return;
@@ -345,13 +493,19 @@ export default function TicketsScreen() {
             }
             renderItem={({ item }) => (
               <Pressable
-                style={[styles.ticketRow, selected?.id === item.id && styles.ticketRowActive]}
+                style={[
+                  styles.ticketRow,
+                  selected?.id === item.id && styles.ticketRowActive,
+                  item.status === "READY" && styles.ticketRowReady,
+                ]}
                 onPress={() => void openTicket(item.id)}
               >
                 <Text style={styles.ticketNumber}>{item.displayNumber}</Text>
                 <View style={styles.ticketMeta}>
                   <Text style={styles.ticketName}>{item.customerName ?? "Fără nume"}</Text>
-                  <Text style={styles.status}>În lucru</Text>
+                  <Text style={[styles.status, item.status === "READY" && styles.statusReady]}>
+                    {statusLabel(item.status)}
+                  </Text>
                 </View>
               </Pressable>
             )}
@@ -385,9 +539,16 @@ export default function TicketsScreen() {
                 onChangeText={setCustomerName}
                 placeholder="ex. Popescu"
                 placeholderTextColor={colors.muted}
-                editable={!locked}
+                editable={isBoardTicket(selected.status)}
                 onEndEditing={() => void saveName()}
               />
+
+              {atCheckout ? (
+                <StatusBanner
+                  tone="info"
+                  message="Biletul este la casă. Nu se mai pot adăuga sau scoate produse."
+                />
+              ) : null}
 
               {!locked ? (
                 <View style={styles.addCard}>
@@ -398,6 +559,7 @@ export default function TicketsScreen() {
                     onSelect={addFromCatalog}
                     onResultsChange={handleResultsChange}
                     disabled={busy}
+                    storeId={session?.staff.storeId ?? device?.storeId}
                   >
                     <Button
                       variant="secondary"
@@ -428,6 +590,9 @@ export default function TicketsScreen() {
                       style={styles.addButton}
                     />
                   </View>
+                  <Text style={styles.stockHint}>
+                    Cantitatea e limitată la stocul acestui magazin, inclusiv ce e deja pe biletele deschise.
+                  </Text>
                 </View>
               ) : null}
 
@@ -444,23 +609,69 @@ export default function TicketsScreen() {
                 style={styles.flex}
                 contentContainerStyle={styles.lineList}
                 ListEmptyComponent={
-                  <Text style={styles.listEmpty}>Niciun produs încă. Caută sau scanează mai sus.</Text>
+                  <Text style={styles.listEmpty}>
+                    {atCheckout
+                      ? "Niciun produs pe bilet."
+                      : "Niciun produs încă. Caută sau scanează mai sus."}
+                  </Text>
                 }
                 renderItem={({ item }) => {
                   const addedBy = addedByLabel(item);
+                  const editing = editingItemId === item.id;
                   return (
                   <View style={styles.line}>
-                    <View style={styles.lineBody}>
-                      <Text style={styles.lineName}>{item.nameSnapshot}</Text>
-                      {addedBy ? <Text style={styles.lineMeta}>{addedBy}</Text> : null}
+                    <View style={styles.lineMain}>
+                      <View style={styles.lineBody}>
+                        <Text style={styles.lineName}>{item.nameSnapshot}</Text>
+                        {addedBy ? <Text style={styles.lineMeta}>{addedBy}</Text> : null}
+                      </View>
+                      <Text style={styles.lineQty}>× {item.quantity}</Text>
+                      {!locked && !editing ? (
+                        <View style={styles.lineActions}>
+                          <Button
+                            variant="secondary"
+                            label="Modifică cantitatea"
+                            disabled={busy}
+                            onPress={() => startEditQuantity(item)}
+                          />
+                          <Button
+                            variant="ghost"
+                            label="Șterge"
+                            disabled={busy}
+                            onPress={() => confirmRemoveItem(item.id, item.nameSnapshot)}
+                          />
+                        </View>
+                      ) : null}
                     </View>
-                    <Text style={styles.lineQty}>× {item.quantity}</Text>
-                    {!locked ? (
-                      <Button
-                        variant="ghost"
-                        label="Șterge"
-                        onPress={() => confirmRemoveItem(item.id, item.nameSnapshot)}
-                      />
+                    {editing ? (
+                      <View style={styles.lineEdit}>
+                        <QuantityStepper
+                          value={editQty}
+                          onChange={(value) => {
+                            if (editQtyKind === "piece") {
+                              setEditQty(value.replace(/[^\d]/g, "") || "1");
+                              return;
+                            }
+                            setEditQty(value);
+                          }}
+                          kind={editQtyKind}
+                          unitLabel={editQtySuffix}
+                          disabled={busy}
+                          max={editRemaining ?? undefined}
+                        />
+                        <Button
+                          label="Salvează"
+                          disabled={busy}
+                          loading={busy}
+                          onPress={() => void saveEditQuantity()}
+                        />
+                        <Button
+                          variant="ghost"
+                          label="Anulează"
+                          disabled={busy}
+                          onPress={() => setEditingItemId(null)}
+                        />
+                      </View>
                     ) : null}
                   </View>
                   );
@@ -473,7 +684,8 @@ export default function TicketsScreen() {
       <BarcodeScannerModal
         visible={scannerOpen}
         onClose={() => setScannerOpen(false)}
-        onScanned={addFromScan}
+        resolveProduct={resolveScannedProduct}
+        onConfirm={confirmScannedProduct}
       />
     </View>
   );
@@ -524,10 +736,14 @@ const styles = StyleSheet.create({
     borderColor: colors.accent,
     backgroundColor: colors.accentSoft,
   },
+  ticketRowReady: {
+    borderColor: colors.info,
+  },
   ticketNumber: { color: colors.text, fontSize: 28, fontWeight: "800", width: 64 },
   ticketMeta: { flex: 1 },
   ticketName: { color: colors.text, fontSize: typeScale.body, fontWeight: "700" },
   status: { color: colors.muted, fontSize: 15, marginTop: 2, fontWeight: "600" },
+  statusReady: { color: colors.info, fontWeight: "800" },
   detailHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -557,6 +773,7 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
   },
   addButton: { flexGrow: 1, minWidth: 160 },
+  stockHint: { color: colors.muted, fontSize: 15, fontWeight: "600", lineHeight: 22 },
   input: {
     minHeight: touchMin,
     backgroundColor: colors.panel,
@@ -570,20 +787,35 @@ const styles = StyleSheet.create({
   },
   lineList: { gap: 8, paddingBottom: 16, flexGrow: 1 },
   line: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
     backgroundColor: colors.panel,
     borderRadius: radius,
     padding: 12,
     borderWidth: 1.5,
     borderColor: colors.border,
+    gap: 12,
+  },
+  lineMain: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
     minHeight: touchMin,
   },
   lineBody: { flex: 1, minWidth: 0 },
   lineName: { color: colors.text, fontSize: typeScale.body, fontWeight: "800" },
   lineMeta: { color: colors.muted, fontSize: 15, marginTop: 2 },
   lineQty: { color: colors.accent, fontSize: 22, fontWeight: "800" },
+  lineActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+  },
+  lineEdit: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 12,
+  },
   listEmpty: { color: colors.muted, fontSize: typeScale.body, lineHeight: 26 },
   flex: { flex: 1 },
 });
