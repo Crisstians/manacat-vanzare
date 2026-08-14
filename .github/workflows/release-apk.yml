@@ -1,0 +1,94 @@
+name: Release APK
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-apk:
+    name: Build APK and publish GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Expo and EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          packager: npm
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build APK on EAS
+        id: build
+        run: |
+          set -euo pipefail
+          eas build \
+            --platform android \
+            --profile preview \
+            --non-interactive \
+            --wait \
+            --json \
+            --message "GitHub ${GITHUB_REF_NAME}" \
+            > eas-build.json
+
+          BUILD_ID="$(jq -r 'if type == "array" then .[0].id else .id end' eas-build.json)"
+          STATUS="$(jq -r 'if type == "array" then .[0].status else .status end' eas-build.json)"
+          echo "id=${BUILD_ID}" >> "$GITHUB_OUTPUT"
+          echo "EAS build ${BUILD_ID} status=${STATUS}"
+          cat eas-build.json
+
+          if [ "${STATUS}" != "FINISHED" ]; then
+            echo "EAS build did not finish successfully"
+            exit 1
+          fi
+
+      - name: Download APK
+        run: |
+          set -euo pipefail
+          BUILD_JSON="$(eas build:view "${{ steps.build.outputs.id }}" --json)"
+          URL="$(echo "${BUILD_JSON}" | jq -r '.artifacts.applicationArchiveUrl // .artifacts.buildUrl // empty')"
+          if [ -z "${URL}" ] || [ "${URL}" = "null" ]; then
+            echo "No APK URL on EAS build ${{ steps.build.outputs.id }}"
+            echo "${BUILD_JSON}"
+            exit 1
+          fi
+          curl -L --fail "${URL}" -o "manacat-magazin-${GITHUB_REF_NAME}.apk"
+          ls -lh "manacat-magazin-${GITHUB_REF_NAME}.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: manacat-magazin-${{ github.ref_name }}
+          path: manacat-magazin-${{ github.ref_name }}.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          APK="manacat-magazin-${GITHUB_REF_NAME}.apk"
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${APK}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "Manacat Magazin ${GITHUB_REF_NAME}" \
+              --generate-notes \
+              "${APK}"
+          fi
