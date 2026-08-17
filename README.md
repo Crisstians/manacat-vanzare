@@ -86,6 +86,32 @@ La deschiderea APK-ului, Android **fixează ecranul** (screen pinning): Home și
 
 Poți rula workflow-ul și manual din **Actions** → **Release APK** (fără tag nu creează Release, doar artifact).
 
+## Actualizări după instalare
+
+Tabletele care au deja un APK **fără** aceste mecanisme trebuie reinstalate **o dată** cu un APK nou. După acel APK:
+
+### JavaScript (EAS Update) — fără APK nou
+
+Pentru bug-uri, texte, ecrane (fără librării native, permisiuni sau SDK nou):
+
+```bash
+npx eas-cli@latest update --channel preview --message "Corectare scanare"
+```
+
+sau `npm run update:js -- --message "Corectare scanare"`.
+
+Aplicația verifică la pornire și periodic. Apare un banner **Aplică acum**. Nu acoperă schimbări native.
+
+### APK (instalare din aplicație)
+
+Pentru schimbări native, un tag `v*` publică și `version.json` lângă APK. Tableta compară `versionCode`, descarcă APK-ul, iese temporar din kiosk și deschide instalatorul Android. Utilizatorul trebuie să confirme. Prima dată: Setări → permite instalarea din surse necunoscute pentru Manacat Magazin.
+
+Manifestul publicat:
+
+`https://github.com/Crisstians/manacat-vanzare/releases/latest/download/version.json`
+
+APK-ul nou trebuie semnat cu **aceeași cheie** EAS, altfel Android cere dezinstalare.
+
 ## Ce nu facem
 
 - Nu `expo run:android` / `prebuild` în fluxul zilnic

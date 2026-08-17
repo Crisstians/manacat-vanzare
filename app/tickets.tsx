@@ -16,16 +16,14 @@ import { useAuth } from "../src/auth/AuthContext";
 import { BarcodeScannerModal, type ScannedBarcodeProduct } from "../src/components/BarcodeScannerModal";
 import { CatalogProductSearch } from "../src/components/CatalogProductSearch";
 import { ticketSocket } from "../src/realtime/ticketSocket";
-import { colors, radius, touchMin, typeScale } from "../src/theme";
+import { colors, pressedOpacity, radius, touchMin, typeScale } from "../src/theme";
 import { Button } from "../src/ui/Button";
 import { EmptyHint } from "../src/ui/EmptyHint";
 import { ConnectionPill, StatusBanner } from "../src/ui/StatusBanner";
 import { QuantityStepper } from "../src/ui/QuantityStepper";
 import {
   remainingStock,
-  stockAtStore,
   stockLimitMessage,
-  otherStoreNamesWithStock,
   ticketQtyForProduct,
 } from "../src/stock";
 import { displayUnit, inferUnitFromResults, parseQuantity, quantityKind } from "../src/units";
@@ -134,6 +132,23 @@ function addedByLabel(item: { addedByStaffName: string; addedAtDepartmentName: s
   return "";
 }
 
+function formatQty(quantity: number): string {
+  if (!Number.isFinite(quantity)) return "—";
+  if (Number.isInteger(quantity)) return String(quantity);
+  return quantity.toFixed(3).replace(/\.?0+$/, "").replace(".", ",");
+}
+
+function isNumericCode(raw: string): boolean {
+  return /^\d+$/.test(raw.trim());
+}
+
+type PendingProduct = {
+  code: string;
+  name: string;
+  unit: string;
+  productId: number;
+};
+
 export default function TicketsScreen() {
   const { device, session, logout } = useAuth();
   const [tickets, setTickets] = useState<FloorTicketSummary[]>([]);
@@ -151,8 +166,26 @@ export default function TicketsScreen() {
   const [editUnit, setEditUnit] = useState<string | null>(null);
   const [editRemaining, setEditRemaining] = useState<number | null>(null);
   const [editOtherStores, setEditOtherStores] = useState<string[]>([]);
+  const [pendingProduct, setPendingProduct] = useState<PendingProduct | null>(null);
+  const [unitByProductId, setUnitByProductId] = useState<Record<number, string>>({});
+  const [justAddedId, setJustAddedId] = useState<string | null>(null);
   const selectedIdRef = useRef<string | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   selectedIdRef.current = selected?.id ?? null;
+
+  const rememberUnit = useCallback((productId: number, unit: string) => {
+    if (!unit) return;
+    setUnitByProductId((current) => (current[productId] === unit ? current : { ...current, [productId]: unit }));
+  }, []);
+
+  const flashAdded = useCallback((itemId: string) => {
+    setJustAddedId(itemId);
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = setTimeout(() => {
+      setJustAddedId((current) => (current === itemId ? null : current));
+      highlightTimerRef.current = null;
+    }, 1600);
+  }, []);
 
   const loadList = useCallback(async () => {
     const all = await floorApi.listTickets();
@@ -163,6 +196,8 @@ export default function TicketsScreen() {
     setSelected(null);
     setCustomerName("");
     setEditingItemId(null);
+    setPendingProduct(null);
+    setJustAddedId(null);
     ticketSocket.setTicket(null);
   }, []);
 
@@ -288,10 +323,15 @@ export default function TicketsScreen() {
         code: resolvedCode,
         quantity: parsed.value,
       });
+      const previousIds = new Set(selected.items.map((item) => item.id));
+      const added = updated.items.find((item) => !previousIds.has(item.id));
       setSelected(updated);
       setCode("");
       setQty("1");
       setQtyUnit(null);
+      setPendingProduct(null);
+      rememberUnit(looked.productId, looked.unit);
+      if (added) flashAdded(added.id);
       await loadList();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Produsul nu a fost găsit");
@@ -306,35 +346,41 @@ export default function TicketsScreen() {
     void addProduct(product.code, product.unit);
   };
 
-  const addFromCatalog = (product: CatalogProduct) => {
+  const selectFromCatalog = (product: CatalogProduct) => {
     if (!selected) return;
-    const storeId = session?.staff.storeId ?? device?.storeId ?? "";
-    const storeStock = stockAtStore(product.stockByStore, storeId);
-    const remaining = remainingStock(storeStock, ticketQtyForProduct(selected.items, product.productId));
     const name = product.nameAlt.trim() || product.name.trim() || product.sku;
-    const parsed = parseQuantity(qty, quantityKind(product.unit));
-    if (!parsed.ok) {
-      setError(parsed.message);
-      return;
-    }
-    if (parsed.value > remaining + 1e-9) {
-      setError(
-        stockLimitMessage({
-          remaining,
-          storeStock,
-          productName: name,
-          unit: product.unit,
-          otherStoreNames: otherStoreNamesWithStock(product.stockByStore, storeId),
-        }),
-      );
-      return;
-    }
-    void addProduct(String(product.productId), product.unit);
+    setPendingProduct({
+      code: String(product.productId),
+      name,
+      unit: product.unit,
+      productId: product.productId,
+    });
+    setCode(name);
+    setQtyUnit(product.unit);
+    rememberUnit(product.productId, product.unit);
+    setError(null);
+  };
+
+  const handleQueryChange = (next: string) => {
+    setCode(next);
+    setPendingProduct((current) => (current && next !== current.name ? null : current));
   };
 
   const handleResultsChange = useCallback(
     (items: CatalogProduct[]) => {
+      if (items.length === 0) return;
       setQtyUnit(inferUnitFromResults(items, code));
+      setUnitByProductId((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const item of items) {
+          if (item.unit && next[item.productId] !== item.unit) {
+            next[item.productId] = item.unit;
+            changed = true;
+          }
+        }
+        return changed ? next : current;
+      });
     },
     [code],
   );
@@ -389,6 +435,7 @@ export default function TicketsScreen() {
       .lookupProduct(String(item.productId))
       .then((looked) => {
         setEditUnit(looked.unit);
+        rememberUnit(item.productId, looked.unit);
         setEditRemaining(
           remainingStock(looked.storeStock, ticketQtyForProduct(selected.items, item.productId, item.id)),
         );
@@ -441,6 +488,7 @@ export default function TicketsScreen() {
 
   useEffect(() => {
     setEditingItemId(null);
+    setPendingProduct(null);
   }, [selected?.id]);
 
   useEffect(() => {
@@ -455,6 +503,24 @@ export default function TicketsScreen() {
     const whole = Math.floor(Number(qty.replace(",", ".")));
     setQty(Number.isFinite(whole) && whole > 0 ? String(whole) : "1");
   }, [qty, qtyKind]);
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    };
+  }, []);
+
+  const confirmLogout = () => {
+    Alert.alert("Ieșire?", "Te deconectezi de pe această tabletă.", [
+      { text: "Anulează", style: "cancel" },
+      {
+        text: "Ieșire",
+        style: "destructive",
+        onPress: () => void logout().then(() => router.replace("/login")),
+      },
+    ]);
+  };
+
+  const canAdd = Boolean(pendingProduct) || isNumericCode(code);
   const subtitle = useMemo(
     () => `${device?.departmentName ?? ""} · ${session?.staff.name ?? ""}`,
     [device?.departmentName, session?.staff.name],
@@ -467,9 +533,10 @@ export default function TicketsScreen() {
           title: subtitle,
           headerRight: () => (
             <Pressable
-              onPress={() => void logout().then(() => router.replace("/login"))}
-              style={styles.headerLogout}
+              onPress={confirmLogout}
+              style={({ pressed }) => [styles.headerLogout, pressed && { opacity: pressedOpacity }]}
               hitSlop={8}
+              android_ripple={{ color: "rgba(0,0,0,0.08)" }}
             >
               <Text style={styles.headerLogoutText}>Ieșire</Text>
             </Pressable>
@@ -493,19 +560,35 @@ export default function TicketsScreen() {
             }
             renderItem={({ item }) => (
               <Pressable
-                style={[
+                android_ripple={{ color: "rgba(0,0,0,0.08)" }}
+                style={({ pressed }) => [
                   styles.ticketRow,
                   selected?.id === item.id && styles.ticketRowActive,
                   item.status === "READY" && styles.ticketRowReady,
+                  pressed && { opacity: pressedOpacity },
                 ]}
                 onPress={() => void openTicket(item.id)}
               >
                 <Text style={styles.ticketNumber}>{item.displayNumber}</Text>
                 <View style={styles.ticketMeta}>
-                  <Text style={styles.ticketName}>{item.customerName ?? "Fără nume"}</Text>
-                  <Text style={[styles.status, item.status === "READY" && styles.statusReady]}>
-                    {statusLabel(item.status)}
-                  </Text>
+                  {item.customerName?.trim() ? (
+                    <Text style={styles.ticketName}>{item.customerName.trim()}</Text>
+                  ) : null}
+                  <View
+                    style={[
+                      styles.statusPill,
+                      item.status === "READY" ? styles.statusPillReady : styles.statusPillOpen,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.statusPillText,
+                        item.status === "READY" && styles.statusPillTextReady,
+                      ]}
+                    >
+                      {statusLabel(item.status)}
+                    </Text>
+                  </View>
                 </View>
               </Pressable>
             )}
@@ -555,11 +638,12 @@ export default function TicketsScreen() {
                   <Text style={styles.sectionTitle}>Adaugă produs</Text>
                   <CatalogProductSearch
                     query={code}
-                    onQueryChange={setCode}
-                    onSelect={addFromCatalog}
+                    onQueryChange={handleQueryChange}
+                    onSelect={selectFromCatalog}
                     onResultsChange={handleResultsChange}
                     disabled={busy}
                     storeId={session?.staff.storeId ?? device?.storeId}
+                    selectedProductId={pendingProduct?.productId}
                   >
                     <Button
                       variant="secondary"
@@ -568,6 +652,29 @@ export default function TicketsScreen() {
                       onPress={() => setScannerOpen(true)}
                     />
                   </CatalogProductSearch>
+                  {pendingProduct ? (
+                    <View style={styles.pendingRow}>
+                      <Text style={styles.pendingName} numberOfLines={2}>
+                        {pendingProduct.name}
+                      </Text>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Schimbă produsul"
+                        onPress={() => {
+                          setPendingProduct(null);
+                          setCode("");
+                          setQtyUnit(null);
+                        }}
+                        style={({ pressed }) => [styles.pendingClear, pressed && { opacity: pressedOpacity }]}
+                      >
+                        <Text style={styles.pendingClearText}>Schimbă</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <Text style={styles.stockHint}>
+                      Alege un produs din listă sau scanează, apoi apasă „Adaugă”.
+                    </Text>
+                  )}
                   <View style={styles.addActions}>
                     <QuantityStepper
                       value={qty}
@@ -584,8 +691,8 @@ export default function TicketsScreen() {
                     />
                     <Button
                       label="Adaugă"
-                      onPress={() => void addProduct()}
-                      disabled={busy}
+                      onPress={() => void addProduct(pendingProduct?.code ?? code, pendingProduct?.unit)}
+                      disabled={busy || !canAdd}
                       loading={busy}
                       style={styles.addButton}
                     />
@@ -596,7 +703,7 @@ export default function TicketsScreen() {
                 </View>
               ) : null}
 
-              {error ? <StatusBanner message={error} /> : null}
+              {error ? <StatusBanner message={error} onDismiss={() => setError(null)} /> : null}
 
               <Text style={styles.sectionTitle}>
                 {selected.items.length === 0
@@ -618,29 +725,50 @@ export default function TicketsScreen() {
                 renderItem={({ item }) => {
                   const addedBy = addedByLabel(item);
                   const editing = editingItemId === item.id;
+                  const unit = unitByProductId[item.productId];
+                  const qtyLabel = unit
+                    ? `${formatQty(item.quantity)} ${displayUnit(unit)}`
+                    : formatQty(item.quantity);
                   return (
-                  <View style={styles.line}>
+                  <View style={[styles.line, justAddedId === item.id && styles.lineAdded]}>
                     <View style={styles.lineMain}>
                       <View style={styles.lineBody}>
                         <Text style={styles.lineName}>{item.nameSnapshot}</Text>
                         {addedBy ? <Text style={styles.lineMeta}>{addedBy}</Text> : null}
                       </View>
-                      <Text style={styles.lineQty}>× {item.quantity}</Text>
+                      {!editing ? (
+                        !locked ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Modifică cantitatea"
+                          disabled={busy}
+                          onPress={() => startEditQuantity(item)}
+                          android_ripple={{ color: "rgba(0,0,0,0.08)" }}
+                          style={({ pressed }) => [
+                            styles.qtyTap,
+                            pressed && { opacity: pressedOpacity },
+                          ]}
+                        >
+                          <Text style={styles.lineQty}>{qtyLabel}</Text>
+                        </Pressable>
+                        ) : (
+                        <Text style={styles.lineQty}>{qtyLabel}</Text>
+                        )
+                      ) : null}
                       {!locked && !editing ? (
-                        <View style={styles.lineActions}>
-                          <Button
-                            variant="secondary"
-                            label="Modifică cantitatea"
-                            disabled={busy}
-                            onPress={() => startEditQuantity(item)}
-                          />
-                          <Button
-                            variant="ghost"
-                            label="Șterge"
-                            disabled={busy}
-                            onPress={() => confirmRemoveItem(item.id, item.nameSnapshot)}
-                          />
-                        </View>
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel={`Șterge ${item.nameSnapshot}`}
+                          disabled={busy}
+                          onPress={() => confirmRemoveItem(item.id, item.nameSnapshot)}
+                          style={({ pressed }) => [
+                            styles.lineDelete,
+                            pressed && { opacity: pressedOpacity },
+                            busy && styles.lineDeleteDisabled,
+                          ]}
+                        >
+                          <Text style={styles.lineDeleteText}>Șterge</Text>
+                        </Pressable>
                       ) : null}
                     </View>
                     {editing ? (
@@ -694,9 +822,11 @@ export default function TicketsScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   headerLogout: {
-    minHeight: 44,
+    minHeight: touchMin,
     justifyContent: "center",
     paddingHorizontal: 8,
+    overflow: "hidden",
+    borderRadius: radius,
   },
   headerLogoutText: {
     color: colors.accent,
@@ -731,6 +861,7 @@ const styles = StyleSheet.create({
     minHeight: touchMin,
     borderWidth: 1.5,
     borderColor: colors.border,
+    overflow: "hidden",
   },
   ticketRowActive: {
     borderColor: colors.accent,
@@ -739,11 +870,30 @@ const styles = StyleSheet.create({
   ticketRowReady: {
     borderColor: colors.info,
   },
-  ticketNumber: { color: colors.text, fontSize: 28, fontWeight: "800", width: 64 },
-  ticketMeta: { flex: 1 },
+  ticketNumber: { color: colors.text, fontSize: 28, fontWeight: "800", flexShrink: 0 },
+  ticketMeta: { flex: 1, gap: 6 },
   ticketName: { color: colors.text, fontSize: typeScale.body, fontWeight: "700" },
-  status: { color: colors.muted, fontSize: 15, marginTop: 2, fontWeight: "600" },
-  statusReady: { color: colors.info, fontWeight: "800" },
+  statusPill: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1.5,
+  },
+  statusPillOpen: {
+    backgroundColor: colors.panelAlt,
+    borderColor: colors.border,
+  },
+  statusPillReady: {
+    backgroundColor: colors.infoSoft,
+    borderColor: colors.info,
+  },
+  statusPillText: {
+    color: colors.muted,
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  statusPillTextReady: { color: colors.info },
   detailHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -773,6 +923,34 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
   },
   addButton: { flexGrow: 1, minWidth: 160 },
+  pendingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: colors.accentSoft,
+    borderRadius: radius,
+    borderWidth: 1.5,
+    borderColor: colors.accent,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    minHeight: touchMin,
+  },
+  pendingName: {
+    flex: 1,
+    color: colors.text,
+    fontSize: typeScale.body,
+    fontWeight: "800",
+  },
+  pendingClear: {
+    minHeight: touchMin - 8,
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  pendingClearText: {
+    color: colors.accent,
+    fontSize: 16,
+    fontWeight: "800",
+  },
   stockHint: { color: colors.muted, fontSize: 15, fontWeight: "600", lineHeight: 22 },
   input: {
     minHeight: touchMin,
@@ -794,22 +972,40 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     gap: 12,
   },
+  lineAdded: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
+  },
   lineMain: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: 8,
     minHeight: touchMin,
   },
   lineBody: { flex: 1, minWidth: 0 },
   lineName: { color: colors.text, fontSize: typeScale.body, fontWeight: "800" },
   lineMeta: { color: colors.muted, fontSize: 15, marginTop: 2 },
   lineQty: { color: colors.accent, fontSize: 22, fontWeight: "800" },
-  lineActions: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: 8,
+  qtyTap: {
+    minHeight: touchMin,
+    minWidth: touchMin,
+    paddingHorizontal: 10,
+    justifyContent: "center",
+    alignItems: "flex-end",
+    borderRadius: radius,
+    overflow: "hidden",
   },
+  lineDelete: {
+    minHeight: touchMin,
+    justifyContent: "center",
+    paddingHorizontal: 8,
+  },
+  lineDeleteText: {
+    color: colors.danger,
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  lineDeleteDisabled: { opacity: 0.4 },
   lineEdit: {
     flexDirection: "row",
     flexWrap: "wrap",

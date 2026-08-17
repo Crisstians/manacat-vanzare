@@ -11,7 +11,7 @@ import {
 import * as floorApi from "../src/api/floorApi";
 import type { PublicStaff } from "../src/api/types";
 import { useAuth } from "../src/auth/AuthContext";
-import { colors, radius, touchMin, typeScale } from "../src/theme";
+import { colors, pressedOpacity, radius, touchMin, typeScale } from "../src/theme";
 import { Button } from "../src/ui/Button";
 import { PinPad } from "../src/ui/PinPad";
 import { StatusBanner } from "../src/ui/StatusBanner";
@@ -73,7 +73,12 @@ export default function LoginScreen() {
             contentContainerStyle={styles.staffList}
             renderItem={({ item }) => (
               <Pressable
-                style={[styles.person, selected?.id === item.id && styles.personActive]}
+                android_ripple={{ color: "rgba(0,0,0,0.08)" }}
+                style={({ pressed }) => [
+                  styles.person,
+                  selected?.id === item.id && styles.personActive,
+                  pressed && { opacity: pressedOpacity },
+                ]}
                 onPress={() => pickStaff(item)}
               >
                 <Text style={styles.personName}>{item.name}</Text>
@@ -88,7 +93,7 @@ export default function LoginScreen() {
             <Text style={styles.hint}>Alege-ți numele din stânga, apoi tastează PIN-ul.</Text>
           ) : null}
           <PinPad value={pin} onChange={setPin} disabled={!selected || busy} />
-          {error ? <StatusBanner message={error} /> : null}
+          {error ? <StatusBanner message={error} onDismiss={() => setError(null)} /> : null}
           <Button
             label="Intră"
             onPress={() => void submit()}
@@ -129,6 +134,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     justifyContent: "center",
     minHeight: touchMin + 8,
+    overflow: "hidden",
   },
   personActive: {
     borderColor: colors.accent,

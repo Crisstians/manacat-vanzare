@@ -69,6 +69,30 @@ jobs:
           curl -L --fail "${URL}" -o "manacat-magazin-${GITHUB_REF_NAME}.apk"
           ls -lh "manacat-magazin-${GITHUB_REF_NAME}.apk"
 
+      - name: Write version manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          BUILD_JSON="$(eas build:view "${{ steps.build.outputs.id }}" --json)"
+          VERSION_CODE="$(echo "${BUILD_JSON}" | jq -r '.appBuildVersion // empty')"
+          VERSION_NAME="$(echo "${BUILD_JSON}" | jq -r '.appVersion // empty')"
+          if [ -z "${VERSION_CODE}" ] || [ "${VERSION_CODE}" = "null" ]; then
+            echo "EAS build is missing appBuildVersion"
+            echo "${BUILD_JSON}"
+            exit 1
+          fi
+          if [ -z "${VERSION_NAME}" ] || [ "${VERSION_NAME}" = "null" ]; then
+            VERSION_NAME="${GITHUB_REF_NAME#v}"
+          fi
+          APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/manacat-magazin-${GITHUB_REF_NAME}.apk"
+          jq -n \
+            --argjson versionCode "${VERSION_CODE}" \
+            --arg versionName "${VERSION_NAME}" \
+            --arg url "${APK_URL}" \
+            '{versionCode: ($versionCode | tonumber), versionName: $versionName, url: $url}' \
+            > version.json
+          cat version.json
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -85,10 +109,11 @@ jobs:
           set -euo pipefail
           APK="manacat-magazin-${GITHUB_REF_NAME}.apk"
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" "${APK}" --clobber
+            gh release upload "${GITHUB_REF_NAME}" "${APK}" version.json --clobber
           else
             gh release create "${GITHUB_REF_NAME}" \
               --title "Manacat Magazin ${GITHUB_REF_NAME}" \
               --generate-notes \
-              "${APK}"
+              "${APK}" \
+              version.json
           fi

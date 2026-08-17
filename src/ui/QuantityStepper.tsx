@@ -1,5 +1,5 @@
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { colors, radius, touchMin, typeScale } from "../theme";
+import { colors, pressedOpacity, radius, touchMin, typeScale } from "../theme";
 import type { QuantityKind } from "../units";
 
 type QuantityStepperProps = {
@@ -38,7 +38,12 @@ export function QuantityStepper({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Scade cantitatea"
-          style={[styles.stepBtn, disabled && styles.disabled]}
+          android_ripple={disabled ? undefined : { color: "rgba(0,0,0,0.12)" }}
+          style={({ pressed }) => [
+            styles.stepBtn,
+            pressed && !disabled && { opacity: pressedOpacity },
+            disabled && styles.disabled,
+          ]}
           disabled={disabled}
           onPress={() => bump(-1)}
         >
@@ -48,7 +53,12 @@ export function QuantityStepper({
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Crește cantitatea"
-          style={[styles.stepBtn, plusDisabled && styles.disabled]}
+          android_ripple={plusDisabled ? undefined : { color: "rgba(0,0,0,0.12)" }}
+          style={({ pressed }) => [
+            styles.stepBtn,
+            pressed && !plusDisabled && { opacity: pressedOpacity },
+            plusDisabled && styles.disabled,
+          ]}
           disabled={plusDisabled}
           onPress={() => bump(1)}
         >
@@ -91,6 +101,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
   },
   stepBtnText: {
     color: colors.text,

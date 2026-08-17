@@ -1,20 +1,32 @@
-import { StyleSheet, Text, View } from "react-native";
-import { colors, radius, typeScale } from "../theme";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { colors, pressedOpacity, radius, touchMin, typeScale } from "../theme";
 
 type BannerTone = "error" | "offline" | "info";
 
 type StatusBannerProps = {
   message: string;
   tone?: BannerTone;
+  onDismiss?: () => void;
 };
 
-export function StatusBanner({ message, tone = "error" }: StatusBannerProps) {
+export function StatusBanner({ message, tone = "error", onDismiss }: StatusBannerProps) {
   return (
     <View
       accessibilityRole="alert"
       style={[styles.banner, toneStyles[tone]]}
     >
       <Text style={[styles.text, textStyles[tone]]}>{message}</Text>
+      {onDismiss ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Închide"
+          onPress={onDismiss}
+          hitSlop={8}
+          style={({ pressed }) => [styles.dismiss, pressed && { opacity: pressedOpacity }]}
+        >
+          <Text style={[styles.dismissText, textStyles[tone]]}>Închide</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -39,14 +51,27 @@ export function ConnectionPill({ connected }: PillProps) {
 
 const styles = StyleSheet.create({
   banner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
     borderRadius: radius,
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderWidth: 1.5,
   },
   text: {
+    flex: 1,
     fontSize: typeScale.body,
     fontWeight: "700",
+  },
+  dismiss: {
+    minHeight: touchMin - 12,
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  dismissText: {
+    fontSize: 16,
+    fontWeight: "800",
   },
   pill: {
     flexDirection: "row",

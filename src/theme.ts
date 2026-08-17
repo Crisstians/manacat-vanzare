@@ -15,6 +15,7 @@ export const colors = {
   successSoft: "#dcfce7",
   successText: "#14532d",
   info: "#0369a1",
+  infoSoft: "#e0f2fe",
 };
 
 export const space = {
@@ -28,6 +29,8 @@ export const space = {
 export const radius = 14;
 
 export const touchMin = 56;
+
+export const pressedOpacity = 0.72;
 
 export const typeScale = {
   body: 18,

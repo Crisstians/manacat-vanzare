@@ -11,7 +11,7 @@ import {
 import * as floorApi from "../src/api/floorApi";
 import type { Department, Store } from "../src/api/types";
 import { useAuth } from "../src/auth/AuthContext";
-import { colors, radius, touchMin, typeScale } from "../src/theme";
+import { colors, pressedOpacity, radius, touchMin, typeScale } from "../src/theme";
 import { Button } from "../src/ui/Button";
 import { StatusBanner } from "../src/ui/StatusBanner";
 
@@ -68,7 +68,7 @@ export default function SetupScreen() {
       <Text style={styles.lead}>
         {store ? "Alege raionul acestei tablete" : "Alege magazinul"}
       </Text>
-      {error ? <StatusBanner message={error} /> : null}
+      {error ? <StatusBanner message={error} onDismiss={() => setError(null)} /> : null}
       {loading ? (
         <ActivityIndicator color={colors.accent} size="large" style={styles.spinner} />
       ) : store ? (
@@ -80,7 +80,11 @@ export default function SetupScreen() {
           columnWrapperStyle={styles.columns}
           contentContainerStyle={styles.grid}
           renderItem={({ item }) => (
-            <Pressable style={styles.card} onPress={() => void pickDepartment(item)}>
+            <Pressable
+              android_ripple={{ color: "rgba(0,0,0,0.08)" }}
+              style={({ pressed }) => [styles.card, pressed && { opacity: pressedOpacity }]}
+              onPress={() => void pickDepartment(item)}
+            >
               <Text style={styles.cardTitle}>{item.name}</Text>
             </Pressable>
           )}
@@ -94,7 +98,11 @@ export default function SetupScreen() {
           columnWrapperStyle={styles.columns}
           contentContainerStyle={styles.grid}
           renderItem={({ item }) => (
-            <Pressable style={styles.card} onPress={() => void pickStore(item)}>
+            <Pressable
+              android_ripple={{ color: "rgba(0,0,0,0.08)" }}
+              style={({ pressed }) => [styles.card, pressed && { opacity: pressedOpacity }]}
+              onPress={() => void pickStore(item)}
+            >
               <Text style={styles.cardTitle}>{item.name}</Text>
               <Text style={styles.muted}>{item.city}</Text>
             </Pressable>
@@ -130,6 +138,7 @@ const styles = StyleSheet.create({
     padding: 20,
     minHeight: touchMin + 40,
     justifyContent: "center",
+    overflow: "hidden",
   },
   cardTitle: { color: colors.text, fontSize: 20, fontWeight: "800" },
   muted: { color: colors.muted, marginTop: 6, fontSize: typeScale.body },

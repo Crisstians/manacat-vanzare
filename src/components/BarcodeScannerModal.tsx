@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAudioPlayer, setAudioModeAsync } from "expo-audio";
 import { CameraView, useCameraPermissions, type BarcodeScanningResult, type BarcodeType } from "expo-camera";
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
-import { colors, radius, touchMin, typeScale } from "../theme";
+import { colors, pressedOpacity, radius, touchMin, typeScale } from "../theme";
 import { Button } from "../ui/Button";
 
 const scanBeep = require("../../assets/sounds/scan.mp3");
@@ -264,10 +264,16 @@ export function BarcodeScannerModal({
                 <>
                   <View style={styles.dimTop}>
                     <View style={styles.topBar}>
-                      <Pressable style={styles.ghost} onPress={onClose}>
+                      <Pressable
+                        style={({ pressed }) => [styles.ghost, pressed && { opacity: pressedOpacity }]}
+                        onPress={onClose}
+                      >
                         <Text style={styles.ghostText}>Închide</Text>
                       </Pressable>
-                      <Pressable style={styles.ghost} onPress={() => setTorch((current) => !current)}>
+                      <Pressable
+                        style={({ pressed }) => [styles.ghost, pressed && { opacity: pressedOpacity }]}
+                        onPress={() => setTorch((current) => !current)}
+                      >
                         <Text style={styles.ghostText}>{torch ? "Lanternă oprită" : "Lanternă"}</Text>
                       </Pressable>
                     </View>
@@ -290,10 +296,16 @@ export function BarcodeScannerModal({
                 <>
                   <View style={styles.dimFull} pointerEvents="box-none">
                     <View style={styles.topBar}>
-                      <Pressable style={styles.ghost} onPress={onClose}>
+                      <Pressable
+                        style={({ pressed }) => [styles.ghost, pressed && { opacity: pressedOpacity }]}
+                        onPress={onClose}
+                      >
                         <Text style={styles.ghostText}>Închide</Text>
                       </Pressable>
-                      <Pressable style={styles.ghost} onPress={() => setTorch((current) => !current)}>
+                      <Pressable
+                        style={({ pressed }) => [styles.ghost, pressed && { opacity: pressedOpacity }]}
+                        onPress={() => setTorch((current) => !current)}
+                      >
                         <Text style={styles.ghostText}>{torch ? "Lanternă oprită" : "Lanternă"}</Text>
                       </Pressable>
                     </View>
@@ -478,6 +490,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderWidth: 1.5,
     borderColor: "rgba(255,255,255,0.35)",
+    overflow: "hidden",
   },
   ghostText: { color: "#ffffff", fontWeight: "800", fontSize: typeScale.button },
   ghostLight: {

@@ -6,7 +6,7 @@ import {
   type StyleProp,
   type ViewStyle,
 } from "react-native";
-import { colors, radius, touchMin, typeScale } from "../theme";
+import { colors, pressedOpacity, radius, touchMin, typeScale } from "../theme";
 
 type ButtonVariant = "primary" | "secondary" | "danger" | "ghost";
 
@@ -32,7 +32,14 @@ export function Button({
     <Pressable
       accessibilityRole="button"
       accessibilityState={{ disabled: inactive }}
-      style={[styles.base, styles[variant], inactive && styles.disabled, style]}
+      android_ripple={inactive ? undefined : { color: "rgba(0,0,0,0.14)" }}
+      style={({ pressed }) => [
+        styles.base,
+        styles[variant],
+        pressed && !inactive && styles.pressed,
+        inactive && styles.disabled,
+        style,
+      ]}
       disabled={inactive}
       onPress={onPress}
     >
@@ -54,6 +61,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
   },
   primary: {
     backgroundColor: colors.accent,
@@ -70,6 +78,9 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
     borderWidth: 1.5,
     borderColor: colors.border,
+  },
+  pressed: {
+    opacity: pressedOpacity,
   },
   disabled: {
     opacity: 0.4,

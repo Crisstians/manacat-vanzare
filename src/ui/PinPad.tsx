@@ -1,5 +1,5 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { colors, radius, touchMin } from "../theme";
+import { colors, pressedOpacity, radius, touchMin } from "../theme";
 
 const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "back"] as const;
 
@@ -44,7 +44,13 @@ export function PinPad({ value, onChange, maxLength = 6, disabled }: PinPadProps
                   key={key}
                   accessibilityRole="button"
                   accessibilityLabel={key === "back" ? "Șterge ultima cifră" : `Cifra ${key}`}
-                  style={[styles.key, styles.keyBtn, disabled && styles.disabled]}
+                  android_ripple={disabled ? undefined : { color: "rgba(0,0,0,0.12)" }}
+                  style={({ pressed }) => [
+                    styles.key,
+                    styles.keyBtn,
+                    pressed && !disabled && { opacity: pressedOpacity },
+                    disabled && styles.disabled,
+                  ]}
                   disabled={disabled}
                   onPress={() => press(key)}
                 >
@@ -93,6 +99,7 @@ const styles = StyleSheet.create({
     borderRadius: radius,
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
   },
   keyText: {
     color: colors.text,

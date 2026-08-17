@@ -12,12 +12,12 @@ import {
 import { searchProducts, type CatalogProduct } from "../api/productsApi";
 import { apiOrigin } from "../config";
 import { formatStockAmount, otherStockHint, otherStoreNamesWithStock, stockAtStore } from "../stock";
-import { colors, radius, touchMin, typeScale } from "../theme";
+import { colors, pressedOpacity, radius, touchMin, typeScale } from "../theme";
 import { displayUnit } from "../units";
 
 const DEBOUNCE_MS = 300;
 const RESULT_LIMIT = 20;
-const RESULTS_MAX_HEIGHT = 300;
+const RESULTS_MAX_HEIGHT = 200;
 
 type CatalogProductSearchProps = {
   query: string;
@@ -26,6 +26,7 @@ type CatalogProductSearchProps = {
   onResultsChange?: (items: CatalogProduct[]) => void;
   disabled?: boolean;
   storeId?: string;
+  selectedProductId?: number | null;
   children?: ReactNode;
 };
 
@@ -69,15 +70,27 @@ export function CatalogProductSearch({
   onResultsChange,
   disabled,
   storeId,
+  selectedProductId,
   children,
 }: CatalogProductSearchProps) {
   const abortRef = useRef<AbortController | null>(null);
+  const suppressSearchRef = useRef(false);
   const [items, setItems] = useState<CatalogProduct[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
 
   useEffect(() => {
+    if (suppressSearchRef.current) {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setItems([]);
+      setError(null);
+      setLoading(false);
+      setSearched(false);
+      return;
+    }
+
     if (!shouldTriggerCatalogSearch(query)) {
       abortRef.current?.abort();
       abortRef.current = null;
@@ -176,13 +189,23 @@ export function CatalogProductSearch({
             return (
               <Pressable
                 key={item.productId}
-                style={[
+                android_ripple={disabled || outOfStock ? undefined : { color: "rgba(0,0,0,0.08)" }}
+                style={({ pressed }) => [
                   styles.resultRow,
                   index > 0 && styles.resultRowBorder,
+                  selectedProductId === item.productId && styles.resultRowSelected,
                   outOfStock && styles.resultRowDisabled,
+                  pressed && !outOfStock && !disabled && { opacity: pressedOpacity },
                 ]}
                 disabled={disabled || outOfStock}
-                onPress={() => onSelect(item)}
+                onPress={() => {
+                  suppressSearchRef.current = true;
+                  setItems([]);
+                  setError(null);
+                  setLoading(false);
+                  setSearched(false);
+                  onSelect(item);
+                }}
               >
                 <View style={styles.thumb}>
                   {thumb ? (
@@ -233,7 +256,10 @@ export function CatalogProductSearch({
         <TextInput
           style={styles.input}
           value={query}
-          onChangeText={onQueryChange}
+          onChangeText={(next) => {
+            suppressSearchRef.current = false;
+            onQueryChange(next);
+          }}
           placeholder="Caută după nume, SKU sau cod…"
           placeholderTextColor={colors.muted}
           autoCorrect={false}
@@ -299,6 +325,7 @@ const styles = StyleSheet.create({
     minHeight: 72,
     paddingHorizontal: 12,
     paddingVertical: 10,
+    overflow: "hidden",
   },
   resultRowBorder: {
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -320,6 +347,9 @@ const styles = StyleSheet.create({
   resultMeta: { color: colors.muted, fontSize: 15, marginTop: 4 },
   resultStock: { color: colors.successText, fontSize: 15, fontWeight: "700", marginTop: 4 },
   resultStockOut: { color: colors.danger },
+  resultRowSelected: {
+    backgroundColor: colors.accentSoft,
+  },
   resultRowDisabled: { opacity: 0.55 },
   resultPrice: { color: colors.text, fontSize: 16, fontWeight: "700" },
 });
