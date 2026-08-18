@@ -81,6 +81,27 @@ export type ProductLookup = {
   otherStoreNames?: string[];
 };
 
+export type StockInboundItem = {
+  id: string;
+  productId: number;
+  sku: string;
+  name: string;
+  storeId: string | null;
+  storeName: string | null;
+  before: number;
+  after: number;
+  delta: number;
+  direction: "UP" | "NEW";
+  importedAt: string;
+};
+
+export type StockInboundReport = {
+  since: string;
+  totals: { count: number; sumDelta: number };
+  imports: { id: string; importedAt: string; importedByName: string }[];
+  items: StockInboundItem[];
+};
+
 export type AuthSession = {
   accessToken: string;
   refreshToken: string;

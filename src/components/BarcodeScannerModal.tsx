@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useAudioPlayer, setAudioModeAsync } from "expo-audio";
 import { CameraView, useCameraPermissions, type BarcodeScanningResult, type BarcodeType } from "expo-camera";
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { isNotFoundError } from "../api/client";
+import type { CatalogProduct } from "../api/productsApi";
 import { colors, pressedOpacity, radius, touchMin, typeScale } from "../theme";
 import { Button } from "../ui/Button";
+import { CatalogProductSearch, catalogDisplayName } from "./CatalogProductSearch";
 
 const scanBeep = require("../../assets/sounds/scan.mp3");
 
@@ -90,13 +93,25 @@ export type ScannedBarcodeProduct = {
   unit: string;
 };
 
-type ScanPhase = "idle" | "holding" | "looking" | "confirm" | "error";
+type ScanPhase =
+  | "idle"
+  | "holding"
+  | "looking"
+  | "confirm"
+  | "error"
+  | "unknown"
+  | "pick"
+  | "linkConfirm"
+  | "linking";
 
 type BarcodeScannerModalProps = {
   visible: boolean;
   onClose: () => void;
   onConfirm: (product: ScannedBarcodeProduct) => void;
   resolveProduct: (code: string) => Promise<ScannedBarcodeProduct>;
+  linkUnknownCode: (code: string, productId: number) => Promise<ScannedBarcodeProduct>;
+  storeId?: string;
+  addToTicket?: boolean;
 };
 
 export function BarcodeScannerModal({
@@ -104,6 +119,9 @@ export function BarcodeScannerModal({
   onClose,
   onConfirm,
   resolveProduct,
+  linkUnknownCode,
+  storeId,
+  addToTicket = true,
 }: BarcodeScannerModalProps) {
   const [permission, requestPermission] = useCameraPermissions();
   const scanPlayer = useAudioPlayer(scanBeep);
@@ -111,6 +129,10 @@ export function BarcodeScannerModal({
   const [phase, setPhase] = useState<ScanPhase>("idle");
   const [product, setProduct] = useState<ScannedBarcodeProduct | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [unknownCode, setUnknownCode] = useState<string | null>(null);
+  const [pickQuery, setPickQuery] = useState("");
+  const [pendingLink, setPendingLink] = useState<CatalogProduct | null>(null);
+  const [justLinked, setJustLinked] = useState(false);
   const lockedRef = useRef(false);
   const ignoredCodeRef = useRef<string | null>(null);
   const lastCodeRef = useRef<string | null>(null);
@@ -146,6 +168,10 @@ export function BarcodeScannerModal({
     setPhase("idle");
     setProduct(null);
     setError(null);
+    setUnknownCode(null);
+    setPickQuery("");
+    setPendingLink(null);
+    setJustLinked(false);
   };
 
   useEffect(() => {
@@ -187,6 +213,11 @@ export function BarcodeScannerModal({
       setPhase("confirm");
     } catch (err) {
       if (requestIdRef.current !== requestId) return;
+      if (isNotFoundError(err)) {
+        setUnknownCode(data);
+        setPhase("unknown");
+        return;
+      }
       setError(err instanceof Error ? err.message : "Produsul nu a fost găsit");
       setPhase("error");
     }
@@ -215,6 +246,24 @@ export function BarcodeScannerModal({
   const resumeScanning = () => {
     ignoredCodeRef.current = lastCodeRef.current;
     resetScan();
+  };
+
+  const confirmUnknownLink = async () => {
+    if (!unknownCode || !pendingLink) return;
+    const requestId = requestIdRef.current;
+    setPhase("linking");
+    try {
+      const looked = await linkUnknownCode(unknownCode, pendingLink.productId);
+      if (requestIdRef.current !== requestId) return;
+      setProduct(looked);
+      setPendingLink(null);
+      setJustLinked(true);
+      setPhase("confirm");
+    } catch (err) {
+      if (requestIdRef.current !== requestId) return;
+      setError(err instanceof Error ? err.message : "Asocierea a eșuat");
+      setPhase("error");
+    }
   };
 
   return (
@@ -260,7 +309,44 @@ export function BarcodeScannerModal({
               onBarcodeScanned={phase === "idle" ? handleBarCodeScanned : undefined}
             />
             <View style={styles.overlay} pointerEvents="box-none">
-              {phase === "idle" ? (
+              {phase === "pick" ? (
+                <KeyboardAvoidingView
+                  style={styles.pickerScreen}
+                  behavior={Platform.OS === "ios" ? "padding" : undefined}
+                >
+                  <View style={styles.topBar}>
+                    <Pressable
+                      style={({ pressed }) => [styles.ghostDark, pressed && { opacity: pressedOpacity }]}
+                      onPress={() => {
+                        setPendingLink(null);
+                        setPhase("unknown");
+                      }}
+                    >
+                      <Text style={styles.ghostDarkText}>Înapoi</Text>
+                    </Pressable>
+                    <Pressable
+                      style={({ pressed }) => [styles.ghostDark, pressed && { opacity: pressedOpacity }]}
+                      onPress={onClose}
+                    >
+                      <Text style={styles.ghostDarkText}>Închide</Text>
+                    </Pressable>
+                  </View>
+                  <Text style={styles.pickerTitle}>
+                    Asociază codul {unknownCode} cu un produs
+                  </Text>
+                  <CatalogProductSearch
+                    query={pickQuery}
+                    onQueryChange={setPickQuery}
+                    onSelect={(item) => {
+                      setPendingLink(item);
+                      setPhase("linkConfirm");
+                    }}
+                    storeId={storeId}
+                    resultsFill
+                    autoFocus
+                  />
+                </KeyboardAvoidingView>
+              ) : phase === "idle" ? (
                 <>
                   <View style={styles.dimTop}>
                     <View style={styles.topBar}>
@@ -320,7 +406,64 @@ export function BarcodeScannerModal({
                             <Text style={styles.promptText}>Se identifică produsul…</Text>
                           </>
                         ) : null}
+                        {phase === "linking" ? (
+                          <>
+                            <ActivityIndicator color={colors.accent} size="large" />
+                            <Text style={styles.promptText}>Se asociază codul…</Text>
+                          </>
+                        ) : null}
+                        {phase === "unknown" && unknownCode ? (
+                          <>
+                            <Text style={styles.promptText}>
+                              A fost detectat un cod necunoscut: {unknownCode}
+                            </Text>
+                            <Text style={styles.promptSubtext}>
+                              Vrei să-l asociezi cu un produs existent?
+                            </Text>
+                            <View style={styles.promptActions}>
+                              <Button
+                                label="Nu"
+                                variant="secondary"
+                                onPress={resumeScanning}
+                                style={styles.promptButton}
+                              />
+                              <Button
+                                label="Da"
+                                onPress={() => {
+                                  setPickQuery("");
+                                  setPendingLink(null);
+                                  setPhase("pick");
+                                }}
+                                style={styles.promptButton}
+                              />
+                            </View>
+                          </>
+                        ) : null}
+                        {phase === "linkConfirm" && unknownCode && pendingLink ? (
+                          <>
+                            <Text style={styles.promptText}>
+                              Asociezi codul {unknownCode} cu {catalogDisplayName(pendingLink)}?
+                            </Text>
+                            <View style={styles.promptActions}>
+                              <Button
+                                label="Nu"
+                                variant="secondary"
+                                onPress={() => {
+                                  setPendingLink(null);
+                                  setPhase("pick");
+                                }}
+                                style={styles.promptButton}
+                              />
+                              <Button
+                                label="Da"
+                                onPress={() => void confirmUnknownLink()}
+                                style={styles.promptButton}
+                              />
+                            </View>
+                          </>
+                        ) : null}
                         {phase === "confirm" && product ? (
+                          addToTicket ? (
                           <>
                             <Text style={styles.promptText}>
                               A fost scanat produsul {product.name}, confirmă?
@@ -339,6 +482,20 @@ export function BarcodeScannerModal({
                               />
                             </View>
                           </>
+                          ) : (
+                          <>
+                            <Text style={styles.promptText}>
+                              {justLinked
+                                ? `Codul a fost asociat cu ${product.name}.`
+                                : `Produsul ${product.name} e deja identificat.`}
+                            </Text>
+                            <Button
+                              label="Scanează din nou"
+                              variant="secondary"
+                              onPress={resumeScanning}
+                            />
+                          </>
+                          )
                         ) : null}
                         {phase === "error" ? (
                           <>
@@ -464,6 +621,25 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 32,
   },
+  promptSubtext: {
+    color: colors.muted,
+    fontSize: typeScale.body,
+    fontWeight: "700",
+    textAlign: "center",
+    lineHeight: 26,
+  },
+  pickerScreen: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: colors.bg,
+    padding: 24,
+    gap: 16,
+  },
+  pickerTitle: {
+    color: colors.text,
+    fontSize: typeScale.body,
+    fontWeight: "800",
+    lineHeight: 26,
+  },
   promptActions: {
     flexDirection: "row",
     gap: 12,
@@ -493,6 +669,18 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   ghostText: { color: "#ffffff", fontWeight: "800", fontSize: typeScale.button },
+  ghostDark: {
+    backgroundColor: colors.panel,
+    borderRadius: radius,
+    paddingHorizontal: 20,
+    minHeight: touchMin,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    overflow: "hidden",
+  },
+  ghostDarkText: { color: colors.text, fontWeight: "800", fontSize: typeScale.button },
   ghostLight: {
     backgroundColor: colors.panel,
     borderRadius: radius,

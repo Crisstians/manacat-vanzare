@@ -4,6 +4,7 @@ import { View } from "react-native";
 import { AuthProvider } from "../src/auth/AuthContext";
 import { useStayInApp } from "../src/kiosk/useStayInApp";
 import { colors } from "../src/theme";
+import { OfflineReconnectOverlay } from "../src/ui/OfflineReconnectOverlay";
 import { UpdateBanner } from "../src/ui/UpdateBanner";
 
 export default function RootLayout() {
@@ -25,6 +26,7 @@ export default function RootLayout() {
             }}
           />
         </View>
+        <OfflineReconnectOverlay />
       </View>
     </AuthProvider>
   );

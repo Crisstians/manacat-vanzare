@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { router, Stack } from "expo-router";
 import {
   Alert,
+  AppState,
   FlatList,
   Pressable,
   StyleSheet,
@@ -16,9 +17,11 @@ import { useAuth } from "../src/auth/AuthContext";
 import { BarcodeScannerModal, type ScannedBarcodeProduct } from "../src/components/BarcodeScannerModal";
 import { CatalogProductSearch } from "../src/components/CatalogProductSearch";
 import { ticketSocket } from "../src/realtime/ticketSocket";
+import { linkUnknownScannedCode, lookupCodeCandidates, resolveScannedProduct } from "../src/scan/productScan";
 import { colors, pressedOpacity, radius, touchMin, typeScale } from "../src/theme";
 import { Button } from "../src/ui/Button";
 import { EmptyHint } from "../src/ui/EmptyHint";
+import { HeaderLink } from "../src/ui/HeaderLink";
 import { ConnectionPill, StatusBanner } from "../src/ui/StatusBanner";
 import { QuantityStepper } from "../src/ui/QuantityStepper";
 import {
@@ -32,30 +35,73 @@ function newClientItemId(): string {
   return `c_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function lookupCodeCandidates(raw: string): string[] {
-  const code = raw.trim();
-  if (!code) return [];
-  if (/^0\d{12}$/.test(code)) return [code, code.slice(1)];
-  return [code];
+function toSummary(ticket: FloorTicket): FloorTicketSummary {
+  const { items: _items, ...summary } = ticket;
+  return summary;
 }
 
-async function resolveScannedProduct(raw: string): Promise<ScannedBarcodeProduct> {
-  const candidates = lookupCodeCandidates(raw.trim());
-  let lastError: unknown;
-  for (const candidate of candidates) {
-    try {
-      const looked = await floorApi.lookupProduct(candidate);
-      const name = looked.name.trim() || looked.sku.trim() || candidate;
-      return { code: candidate, name, unit: looked.unit };
-    } catch (err) {
-      lastError = err;
-    }
+function upsertBoardTicket(tickets: FloorTicketSummary[], next: FloorTicketSummary): FloorTicketSummary[] {
+  if (!isBoardTicket(next.status)) {
+    return tickets.filter((ticket) => ticket.id !== next.id);
   }
-  throw lastError instanceof Error ? lastError : new Error("Produsul nu a fost găsit");
+  const index = tickets.findIndex((ticket) => ticket.id === next.id);
+  if (index === -1) return [next, ...tickets];
+  const copy = tickets.slice();
+  copy[index] = next;
+  return copy;
+}
+
+function applyEventToList(tickets: FloorTicketSummary[], event: FloorTicketEvent): FloorTicketSummary[] {
+  const payload = event.payload as Record<string, unknown>;
+  const existing = tickets.find((ticket) => ticket.id === event.ticketId);
+
+  if (event.type === "ticket.created") {
+    const created: FloorTicketSummary = {
+      id: event.ticketId,
+      storeId: event.storeId,
+      number: Number(payload.displayNumber) || existing?.number || 0,
+      displayNumber: String(payload.displayNumber ?? existing?.displayNumber ?? ""),
+      customerName: (payload.customerName as string | null) ?? existing?.customerName ?? null,
+      status: existing?.status ?? "OPEN",
+      createdByStaffId: String(payload.createdByStaffId ?? existing?.createdByStaffId ?? ""),
+      createdByStaffName: existing?.createdByStaffName ?? "",
+      createdAtDepartmentId: String(payload.createdAtDepartmentId ?? existing?.createdAtDepartmentId ?? ""),
+      createdAtDepartmentName: existing?.createdAtDepartmentName ?? "",
+      createdAt: existing?.createdAt ?? event.at,
+      updatedAt: event.at,
+      lastSeq: event.seq,
+    };
+    return upsertBoardTicket(tickets, created);
+  }
+
+  if (event.type === "ticket.status_changed") {
+    const to = payload.to as FloorTicketStatus;
+    if (!isBoardTicket(to)) {
+      return tickets.filter((ticket) => ticket.id !== event.ticketId);
+    }
+    if (!existing) return tickets;
+    return upsertBoardTicket(tickets, { ...existing, status: to, lastSeq: event.seq, updatedAt: event.at });
+  }
+
+  if (!existing) return tickets;
+
+  if (event.type === "ticket.updated") {
+    return upsertBoardTicket(tickets, {
+      ...existing,
+      customerName: (payload.customerName as string | null) ?? null,
+      lastSeq: event.seq,
+      updatedAt: event.at,
+    });
+  }
+
+  return upsertBoardTicket(tickets, { ...existing, lastSeq: event.seq, updatedAt: event.at });
 }
 
 function applyEvent(ticket: FloorTicket, event: FloorTicketEvent): FloorTicket {
   const payload = event.payload as Record<string, unknown>;
+  if (event.type === "ticket.created") {
+    return { ...ticket, lastSeq: event.seq };
+  }
   if (event.type === "ticket.updated") {
     return { ...ticket, customerName: (payload.customerName as string | null) ?? null, lastSeq: event.seq };
   }
@@ -150,7 +196,7 @@ type PendingProduct = {
 };
 
 export default function TicketsScreen() {
-  const { device, session, logout } = useAuth();
+  const { device, session } = useAuth();
   const [tickets, setTickets] = useState<FloorTicketSummary[]>([]);
   const [selected, setSelected] = useState<FloorTicket | null>(null);
   const [connected, setConnected] = useState(false);
@@ -206,42 +252,88 @@ export default function TicketsScreen() {
       router.replace("/login");
       return;
     }
-    void loadList().catch((err: unknown) =>
-      setError(err instanceof Error ? err.message : "Eroare la încărcare"),
-    );
-    ticketSocket.connect(session.accessToken, {
-      onConnection: setConnected,
-      onTicketEvent: (event) => {
-        void loadList();
-        const leftBoard =
-          event.type === "ticket.status_changed" &&
-          !isBoardTicket(((event.payload as { to?: FloorTicketStatus }).to ?? "OPEN"));
-        if (leftBoard && selectedIdRef.current === event.ticketId) {
+    const handleLoadError = (err: unknown) =>
+      setError(err instanceof Error ? err.message : "Eroare la încărcare");
+
+    const refreshOpenTicket = async () => {
+      const id = selectedIdRef.current;
+      if (!id) return;
+      try {
+        const ticket = await floorApi.getTicket(id);
+        if (!isBoardTicket(ticket.status)) {
           dismissTicket();
+          setTickets((current) => current.filter((row) => row.id !== ticket.id));
           return;
         }
-        setSelected((current) => {
-          if (!current || current.id !== event.ticketId) return current;
-          return applyEvent(current, event);
-        });
+        ticketSocket.setTicket(ticket.id, ticket.lastSeq);
+        setSelected(ticket);
+        setCustomerName(ticket.customerName ?? "");
+        setTickets((current) => upsertBoardTicket(current, toSummary(ticket)));
+      } catch {
+        // keep the current view if the snapshot fails
+      }
+    };
+
+    void loadList().catch(handleLoadError);
+    ticketSocket.connect(session.accessToken, session.staff.storeId, {
+      onConnection: setConnected,
+      onReconnect: () => {
+        void loadList().catch(handleLoadError);
+        void refreshOpenTicket();
+      },
+      onTicketEvent: (event) => {
+        const payload = event.payload as Record<string, unknown>;
+        const leftBoard =
+          event.type === "ticket.status_changed" &&
+          !isBoardTicket((payload.to as FloorTicketStatus | undefined) ?? "OPEN");
+        if (leftBoard && selectedIdRef.current === event.ticketId) {
+          dismissTicket();
+        } else if (selectedIdRef.current === event.ticketId) {
+          if (event.type === "ticket.updated") {
+            setCustomerName((payload.customerName as string | null) ?? "");
+          }
+          if (event.type === "item.added" && payload.itemId) {
+            flashAdded(String(payload.itemId));
+          }
+          setSelected((current) => {
+            if (!current || current.id !== event.ticketId) return current;
+            return applyEvent(current, event);
+          });
+        }
+        setTickets((current) => applyEventToList(current, event));
       },
       onResync: (ticket) => {
         if (!isBoardTicket(ticket.status)) {
-          dismissTicket();
-        } else {
-          setSelected(ticket);
+          if (selectedIdRef.current === ticket.id) dismissTicket();
+          setTickets((current) => current.filter((row) => row.id !== ticket.id));
+          return;
         }
-        void loadList();
+        if (selectedIdRef.current === ticket.id) {
+          setSelected(ticket);
+          setCustomerName(ticket.customerName ?? "");
+        }
+        setTickets((current) => upsertBoardTicket(current, toSummary(ticket)));
       },
     });
-    return () => ticketSocket.disconnect();
-  }, [dismissTicket, loadList, session]);
+
+    const appState = AppState.addEventListener("change", (next) => {
+      if (next !== "active") return;
+      void loadList().catch(handleLoadError);
+      void refreshOpenTicket();
+    });
+
+    return () => {
+      appState.remove();
+      ticketSocket.disconnect();
+    };
+  }, [dismissTicket, flashAdded, loadList, session]);
 
   const openTicket = async (id: string) => {
     setError(null);
     const ticket = await floorApi.getTicket(id);
     setSelected(ticket);
     setCustomerName(ticket.customerName ?? "");
+    setTickets((current) => upsertBoardTicket(current, toSummary(ticket)));
     ticketSocket.setTicket(ticket.id, ticket.lastSeq);
   };
 
@@ -250,7 +342,7 @@ export default function TicketsScreen() {
     setError(null);
     try {
       const ticket = await floorApi.createTicket();
-      await loadList();
+      setTickets((current) => upsertBoardTicket(current, toSummary(ticket)));
       setSelected(ticket);
       setCustomerName("");
       ticketSocket.setTicket(ticket.id, ticket.lastSeq);
@@ -265,7 +357,9 @@ export default function TicketsScreen() {
     if (!selected) return;
     try {
       const updated = await floorApi.updateTicket(selected.id, customerName.trim() || null);
+      ticketSocket.noteSeq(updated.id, updated.lastSeq);
       setSelected(updated);
+      setTickets((current) => upsertBoardTicket(current, toSummary(updated)));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Nu s-a putut salva numele");
     }
@@ -325,14 +419,15 @@ export default function TicketsScreen() {
       });
       const previousIds = new Set(selected.items.map((item) => item.id));
       const added = updated.items.find((item) => !previousIds.has(item.id));
+      ticketSocket.noteSeq(updated.id, updated.lastSeq);
       setSelected(updated);
+      setTickets((current) => upsertBoardTicket(current, toSummary(updated)));
       setCode("");
       setQty("1");
       setQtyUnit(null);
       setPendingProduct(null);
       rememberUnit(looked.productId, looked.unit);
       if (added) flashAdded(added.id);
-      await loadList();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Produsul nu a fost găsit");
     } finally {
@@ -390,9 +485,10 @@ export default function TicketsScreen() {
     setBusy(true);
     setError(null);
     try {
-      await floorApi.changeStatus(selected.id, "CANCELLED");
+      const ticketId = selected.id;
+      await floorApi.changeStatus(ticketId, "CANCELLED");
       dismissTicket();
-      await loadList();
+      setTickets((current) => current.filter((ticket) => ticket.id !== ticketId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Nu s-a putut șterge biletul");
     } finally {
@@ -417,7 +513,10 @@ export default function TicketsScreen() {
         style: "destructive",
         onPress: () => {
           setEditingItemId((current) => (current === itemId ? null : current));
-          void floorApi.removeItem(selected.id, itemId).then(setSelected);
+          void floorApi.removeItem(selected.id, itemId).then((updated) => {
+            ticketSocket.noteSeq(updated.id, updated.lastSeq);
+            setSelected(updated);
+          });
         },
       },
     ]);
@@ -469,7 +568,9 @@ export default function TicketsScreen() {
     setError(null);
     try {
       const updated = await floorApi.updateItem(selected.id, editingItemId, parsed.value);
+      ticketSocket.noteSeq(updated.id, updated.lastSeq);
       setSelected(updated);
+      setTickets((current) => upsertBoardTicket(current, toSummary(updated)));
       setEditingItemId(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Nu s-a putut modifica cantitatea");
@@ -492,10 +593,10 @@ export default function TicketsScreen() {
   }, [selected?.id]);
 
   useEffect(() => {
-    if (!locked) return;
+    if (!selected || canEditItems(selected.status)) return;
     setScannerOpen(false);
     setEditingItemId(null);
-  }, [locked]);
+  }, [selected]);
 
   useEffect(() => {
     if (qtyKind !== "piece") return;
@@ -509,17 +610,6 @@ export default function TicketsScreen() {
     };
   }, []);
 
-  const confirmLogout = () => {
-    Alert.alert("Ieșire?", "Te deconectezi de pe această tabletă.", [
-      { text: "Anulează", style: "cancel" },
-      {
-        text: "Ieșire",
-        style: "destructive",
-        onPress: () => void logout().then(() => router.replace("/login")),
-      },
-    ]);
-  };
-
   const canAdd = Boolean(pendingProduct) || isNumericCode(code);
   const subtitle = useMemo(
     () => `${device?.departmentName ?? ""} · ${session?.staff.name ?? ""}`,
@@ -531,16 +621,7 @@ export default function TicketsScreen() {
       <Stack.Screen
         options={{
           title: subtitle,
-          headerRight: () => (
-            <Pressable
-              onPress={confirmLogout}
-              style={({ pressed }) => [styles.headerLogout, pressed && { opacity: pressedOpacity }]}
-              hitSlop={8}
-              android_ripple={{ color: "rgba(0,0,0,0.08)" }}
-            >
-              <Text style={styles.headerLogoutText}>Ieșire</Text>
-            </Pressable>
-          ),
+          headerLeft: () => <HeaderLink label="Înapoi" onPress={() => router.replace("/home")} />,
         }}
       />
       <View style={styles.split}>
@@ -814,6 +895,8 @@ export default function TicketsScreen() {
         onClose={() => setScannerOpen(false)}
         resolveProduct={resolveScannedProduct}
         onConfirm={confirmScannedProduct}
+        storeId={session?.staff.storeId ?? device?.storeId}
+        linkUnknownCode={linkUnknownScannedCode}
       />
     </View>
   );
@@ -821,18 +904,6 @@ export default function TicketsScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
-  headerLogout: {
-    minHeight: touchMin,
-    justifyContent: "center",
-    paddingHorizontal: 8,
-    overflow: "hidden",
-    borderRadius: radius,
-  },
-  headerLogoutText: {
-    color: colors.accent,
-    fontWeight: "800",
-    fontSize: 18,
-  },
   split: { flex: 1, flexDirection: "row" },
   listPane: {
     width: 340,

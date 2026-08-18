@@ -8,6 +8,7 @@ import type {
   FloorTicketSummary,
   ProductLookup,
   PublicStaff,
+  StockInboundReport,
   Store,
 } from "./types";
 
@@ -103,4 +104,12 @@ export async function listEvents(ticketId: string, afterSeq: number): Promise<Fl
 
 export async function lookupProduct(code: string): Promise<ProductLookup> {
   return getJson<ProductLookup>(`/floor/products/lookup?code=${encodeURIComponent(code)}`);
+}
+
+export async function createScanLink(code: string, productId: number): Promise<ProductLookup> {
+  return postJson<ProductLookup>("/floor/products/scan-links", { code, productId });
+}
+
+export async function listStockInbound(): Promise<StockInboundReport> {
+  return getJson<StockInboundReport>("/floor/catalog/stock-inbound");
 }

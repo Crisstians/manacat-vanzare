@@ -56,6 +56,10 @@ function withFileProviderXml(config) {
 function withApkInstaller(config) {
   config = AndroidConfig.Permissions.withPermissions(config, [
     "android.permission.REQUEST_INSTALL_PACKAGES",
+    "android.permission.ACCESS_NETWORK_STATE",
+    "android.permission.ACCESS_WIFI_STATE",
+    "android.permission.CHANGE_WIFI_STATE",
+    "android.permission.CHANGE_NETWORK_STATE",
   ]);
   config = withFileProviderManifest(config);
   config = withFileProviderXml(config);

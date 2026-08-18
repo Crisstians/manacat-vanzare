@@ -4,6 +4,8 @@ import { requireOptionalNativeModule } from "expo";
 type ApkInstallerNative = {
   canRequestPackageInstalls: () => boolean;
   prepareForExternalUi: () => Promise<void>;
+  requestWifiReconnect: () => Promise<boolean>;
+  openWifiSettings: () => Promise<void>;
   openUnknownSourcesSettings: () => Promise<void>;
   installApk: (fileUri: string) => Promise<void>;
 };
@@ -21,6 +23,19 @@ export function canRequestPackageInstalls(): boolean {
 
 export async function prepareForExternalUi(): Promise<void> {
   await native?.prepareForExternalUi();
+}
+
+export function isWifiAssistAvailable(): boolean {
+  return native != null;
+}
+
+export async function requestWifiReconnect(): Promise<boolean> {
+  return (await native?.requestWifiReconnect()) ?? false;
+}
+
+export async function openWifiSettings(): Promise<void> {
+  if (!native) return;
+  await native.openWifiSettings();
 }
 
 export async function openUnknownSourcesSettings(): Promise<void> {

@@ -4,6 +4,21 @@ import type { AuthSession } from "./types";
 type ApiErrorBody = { error?: string; code?: string };
 type ApiResponse<T> = { data: T };
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public code?: string,
+    public status?: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+export function isNotFoundError(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "NOT_FOUND";
+}
+
 let accessToken: string | null = null;
 let refreshToken: string | null = null;
 let refreshHandler: ((session: AuthSession) => Promise<AuthSession>) | null = null;
@@ -22,12 +37,12 @@ export function configureAuth(handlers: {
   onAuthLost = handlers.onAuthLost;
 }
 
-async function parseError(response: Response): Promise<string> {
+async function parseError(response: Response): Promise<{ error: string; code?: string }> {
   try {
     const body = (await response.json()) as ApiErrorBody;
-    return body.error ?? "Cererea a eșuat.";
+    return { error: body.error ?? "Cererea a eșuat.", code: body.code };
   } catch {
-    return "Cererea a eșuat.";
+    return { error: "Cererea a eșuat." };
   }
 }
 
@@ -66,7 +81,8 @@ async function request<T>(path: string, init: RequestInit, retry = true): Promis
   }
 
   if (!response.ok) {
-    throw new Error(await parseError(response));
+    const parsed = await parseError(response);
+    throw new ApiError(parsed.error, parsed.code, response.status);
   }
 
   if (response.status === 204) {
@@ -90,7 +106,8 @@ export const deleteJson = <T>(path: string) => request<T>(path, { method: "DELET
 export const getPublicJson = async <T>(path: string): Promise<T> => {
   const response = await fetch(apiUrl(path));
   if (!response.ok) {
-    throw new Error(await parseError(response));
+    const parsed = await parseError(response);
+    throw new ApiError(parsed.error, parsed.code, response.status);
   }
   const json = (await response.json()) as ApiResponse<T>;
   return json.data;

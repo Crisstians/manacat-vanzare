@@ -43,7 +43,10 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.REQUEST_INSTALL_PACKAGES"
+        "android.permission.REQUEST_INSTALL_PACKAGES",
+        "android.permission.CAMERA",
+        "android.permission.REQUEST_INSTALL_PACKAGES",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
     "web": {
@@ -60,9 +63,7 @@
       "policy": "appVersion"
     },
     "updates": {
-      "url": "https://u.expo.dev/eb69d799-4dc6-4fbf-9c97-f1c8283f925f",
-      "checkAutomatically": "ON_LOAD",
-      "fallbackToCacheTimeout": 0
+      "url": "https://u.expo.dev/eb69d799-4dc6-4fbf-9c97-f1c8283f925f"
     }
   }
 }

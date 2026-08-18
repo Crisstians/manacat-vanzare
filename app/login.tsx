@@ -26,7 +26,7 @@ export default function LoginScreen() {
 
   useEffect(() => {
     if (status === "ready") {
-      router.replace("/tickets");
+      router.replace("/home");
     }
   }, [status]);
 
@@ -44,7 +44,7 @@ export default function LoginScreen() {
     setError(null);
     try {
       await login(selected.id, pin);
-      router.replace("/tickets");
+      router.replace("/home");
     } catch (err) {
       setError(err instanceof Error ? err.message : "PIN invalid");
       setPin("");

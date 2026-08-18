@@ -16,5 +16,5 @@ export default function Index() {
 
   if (status === "needs-setup") return <Redirect href="/setup" />;
   if (status === "needs-login") return <Redirect href="/login" />;
-  return <Redirect href="/tickets" />;
+  return <Redirect href="/home" />;
 }

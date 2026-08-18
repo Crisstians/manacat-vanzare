@@ -27,6 +27,8 @@ type CatalogProductSearchProps = {
   disabled?: boolean;
   storeId?: string;
   selectedProductId?: number | null;
+  resultsFill?: boolean;
+  autoFocus?: boolean;
   children?: ReactNode;
 };
 
@@ -37,7 +39,7 @@ export function shouldTriggerCatalogSearch(query: string): boolean {
   return trimmed.length >= 2;
 }
 
-function catalogDisplayName(product: CatalogProduct): string {
+export function catalogDisplayName(product: CatalogProduct): string {
   const alt = product.nameAlt?.trim();
   if (alt) return alt;
   const name = product.name?.trim();
@@ -71,6 +73,8 @@ export function CatalogProductSearch({
   disabled,
   storeId,
   selectedProductId,
+  resultsFill,
+  autoFocus,
   children,
 }: CatalogProductSearchProps) {
   const abortRef = useRef<AbortController | null>(null);
@@ -169,7 +173,7 @@ export function CatalogProductSearch({
         <ScrollView
           keyboardShouldPersistTaps="handled"
           nestedScrollEnabled
-          style={styles.resultsList}
+          style={resultsFill ? styles.resultsListFill : styles.resultsList}
         >
           {items.map((item, index) => {
             const title = catalogDisplayName(item);
@@ -244,14 +248,14 @@ export function CatalogProductSearch({
     }
 
     resultsPanel = (
-      <View style={styles.results} accessibilityRole="list">
+      <View style={[styles.results, resultsFill && styles.resultsFill]} accessibilityRole="list">
         {panelBody}
       </View>
     );
   }
 
   return (
-    <View>
+    <View style={resultsFill ? styles.fill : undefined}>
       <View style={styles.row}>
         <TextInput
           style={styles.input}
@@ -264,6 +268,7 @@ export function CatalogProductSearch({
           placeholderTextColor={colors.muted}
           autoCorrect={false}
           autoCapitalize="none"
+          autoFocus={autoFocus}
           editable={!disabled}
           returnKeyType="search"
         />
@@ -275,6 +280,7 @@ export function CatalogProductSearch({
 }
 
 const styles = StyleSheet.create({
+  fill: { flex: 1, minHeight: 0 },
   row: { flexDirection: "row", gap: 10, alignItems: "center" },
   input: {
     flex: 1,
@@ -296,7 +302,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.panel,
     overflow: "hidden",
   },
+  resultsFill: { flex: 1, minHeight: 0 },
   resultsList: { maxHeight: RESULTS_MAX_HEIGHT },
+  resultsListFill: { flex: 1 },
   statusRow: {
     flexDirection: "row",
     alignItems: "center",

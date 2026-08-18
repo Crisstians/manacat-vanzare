@@ -1,7 +1,12 @@
 package expo.modules.apkinstaller
 
+import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
@@ -13,6 +18,8 @@ import java.io.File
 import java.net.URLDecoder
 
 class ApkInstallerModule : Module() {
+  private var wifiNetworkCallback: ConnectivityManager.NetworkCallback? = null
+
   override fun definition() = ModuleDefinition {
     Name("ApkInstaller")
 
@@ -27,6 +34,14 @@ class ApkInstallerModule : Module() {
 
     AsyncFunction("prepareForExternalUi") {
       unpinForExternalUi()
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("requestWifiReconnect") {
+      requestWifiReconnect()
+    }.runOnQueue(Queues.MAIN)
+
+    AsyncFunction("openWifiSettings") {
+      openWifiSettings()
     }.runOnQueue(Queues.MAIN)
 
     AsyncFunction("openUnknownSourcesSettings") {
@@ -59,6 +74,66 @@ class ApkInstallerModule : Module() {
       }
       activity.startActivity(intent)
     }.runOnQueue(Queues.MAIN)
+  }
+
+  private fun requestWifiReconnect(): Boolean {
+    val context = appContext.reactContext ?: appContext.currentActivity ?: return false
+    val appCtx = context.applicationContext
+    var attempted = false
+
+    try {
+      @Suppress("DEPRECATION")
+      val wifiManager = appCtx.getSystemService(Context.WIFI_SERVICE) as WifiManager
+      if (!wifiManager.isWifiEnabled && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+        @Suppress("DEPRECATION")
+        wifiManager.isWifiEnabled = true
+        attempted = true
+      }
+      if (wifiManager.isWifiEnabled) {
+        @Suppress("DEPRECATION")
+        wifiManager.reconnect()
+        @Suppress("DEPRECATION")
+        wifiManager.reassociate()
+        attempted = true
+      }
+    } catch (_: Exception) {
+      // OEM / permission; fall through to ConnectivityManager.
+    }
+
+    try {
+      val cm = appCtx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+      val request = NetworkRequest.Builder()
+        .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+        .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        .build()
+      if (wifiNetworkCallback == null) {
+        wifiNetworkCallback = object : ConnectivityManager.NetworkCallback() {}
+        cm.requestNetwork(request, wifiNetworkCallback!!)
+      }
+      attempted = true
+    } catch (_: Exception) {
+      // CHANGE_NETWORK_STATE missing or OEM restriction.
+    }
+
+    return attempted
+  }
+
+  private fun openWifiSettings() {
+    val activity = appContext.throwingActivity
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      try {
+        activity.startActivity(Intent(Settings.Panel.ACTION_WIFI))
+        return
+      } catch (_: Exception) {
+        // Panel blocked by lock task or missing on OEM.
+      }
+    }
+
+    unpinForExternalUi()
+    val intent = Intent(Settings.ACTION_WIFI_SETTINGS).apply {
+      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    activity.startActivity(intent)
   }
 
   private fun unpinForExternalUi() {
