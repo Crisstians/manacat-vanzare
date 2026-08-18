@@ -20,7 +20,7 @@ module.exports = ({ config }) => {
 
   return {
     ...rest,
-    // Must match the APKs already installed (app.json policy appVersion → "1.0.0").
+    // Must match the APKs already installed (app.json policy appVersion → "1.0.5").
     runtimeVersion: { policy: "appVersion" },
     updates: {
       enabled: true,

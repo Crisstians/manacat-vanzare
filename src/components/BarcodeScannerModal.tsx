@@ -1,91 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useAudioPlayer, setAudioModeAsync } from "expo-audio";
-import { CameraView, useCameraPermissions, type BarcodeScanningResult, type BarcodeType } from "expo-camera";
 import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { isNotFoundError } from "../api/client";
 import type { CatalogProduct } from "../api/productsApi";
+import { isCenterInsideFrame, mapFrameRectToView, normalizedRoi, roisEqual, scaleIfNormalized, type Rect, type Size } from "../scan/scanGeometry";
+import { useScanCameraPermission } from "../scan/useScanCameraPermission";
 import { colors, pressedOpacity, radius, touchMin, typeScale } from "../theme";
 import { Button } from "../ui/Button";
 import { CatalogProductSearch, catalogDisplayName } from "./CatalogProductSearch";
+import { LiveScanCamera, type LiveScanHit } from "./LiveScanCamera";
 
 const scanBeep = require("../../assets/sounds/scan.mp3");
 
 const SCAN_HOLD_MS = 800;
 const DIM = "rgba(0,0,0,0.58)";
-
-type Rect = { x: number; y: number; width: number; height: number };
-type Size = { width: number; height: number };
-
-function scaleIfNormalized(rect: Rect, view: Size): Rect {
-  const maxX = rect.x + rect.width;
-  const maxY = rect.y + rect.height;
-  const looksNormalized = rect.x >= -0.05 && rect.y >= -0.05 && maxX <= 1.2 && maxY <= 1.2;
-  if (!looksNormalized) return rect;
-  return {
-    x: rect.x * view.width,
-    y: rect.y * view.height,
-    width: rect.width * view.width,
-    height: rect.height * view.height,
-  };
-}
-
-function barcodeRect(result: BarcodeScanningResult, view: Size): Rect | null {
-  const points = result.cornerPoints?.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
-  if (points && points.length >= 2) {
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    for (const point of points) {
-      minX = Math.min(minX, point.x);
-      minY = Math.min(minY, point.y);
-      maxX = Math.max(maxX, point.x);
-      maxY = Math.max(maxY, point.y);
-    }
-    return scaleIfNormalized({ x: minX, y: minY, width: maxX - minX, height: maxY - minY }, view);
-  }
-
-  const bounds = result.bounds;
-  if (!bounds || !Number.isFinite(bounds.origin?.x) || !Number.isFinite(bounds.size?.width)) return null;
-  if (bounds.size.width <= 0 && bounds.size.height <= 0) return null;
-  return scaleIfNormalized(
-    {
-      x: bounds.origin.x,
-      y: bounds.origin.y,
-      width: bounds.size.width,
-      height: bounds.size.height,
-    },
-    view,
-  );
-}
-
-function isCenterInsideFrame(barcode: Rect, frame: Rect): boolean {
-  const inset = 4;
-  const cx = barcode.x + barcode.width / 2;
-  const cy = barcode.y + barcode.height / 2;
-  return (
-    cx >= frame.x + inset &&
-    cy >= frame.y + inset &&
-    cx <= frame.x + frame.width - inset &&
-    cy <= frame.y + frame.height - inset
-  );
-}
-
-const BARCODE_TYPES: BarcodeType[] = [
-  "aztec",
-  "ean13",
-  "ean8",
-  "qr",
-  "pdf417",
-  "upc_e",
-  "datamatrix",
-  "code39",
-  "code93",
-  "itf14",
-  "codabar",
-  "code128",
-  "upc_a",
-];
 
 export type ScannedBarcodeProduct = {
   code: string;
@@ -123,9 +51,10 @@ export function BarcodeScannerModal({
   storeId,
   addToTicket = true,
 }: BarcodeScannerModalProps) {
-  const [permission, requestPermission] = useCameraPermissions();
+  const { hasPermission, canRequestPermission, requestPermission } = useScanCameraPermission();
   const scanPlayer = useAudioPlayer(scanBeep);
   const [torch, setTorch] = useState(false);
+  const [scanRoi, setScanRoi] = useState<Rect | null>(null);
   const [phase, setPhase] = useState<ScanPhase>("idle");
   const [product, setProduct] = useState<ScannedBarcodeProduct | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -152,7 +81,11 @@ export function BarcodeScannerModal({
         if (sw > 0 && sh > 0) viewSizeRef.current = { width: sw, height: sh };
         frame.measureInWindow((fx, fy, fw, fh) => {
           if (fw <= 0 || fh <= 0) return;
-          frameRectRef.current = { x: fx - sx, y: fy - sy, width: fw, height: fh };
+          const next = { x: fx - sx, y: fy - sy, width: fw, height: fh };
+          frameRectRef.current = next;
+          const view = viewSizeRef.current;
+          const nextRoi = normalizedRoi(next, view);
+          setScanRoi((current) => (roisEqual(current, nextRoi) ? current : nextRoi));
         });
       });
     });
@@ -223,15 +156,20 @@ export function BarcodeScannerModal({
     }
   };
 
-  const handleBarCodeScanned = (result: BarcodeScanningResult) => {
-    const data = result.data?.trim();
+  const handleLiveHit = (hit: LiveScanHit) => {
+    const data = hit.code.trim();
     if (!data || lockedRef.current) return;
     if (data === ignoredCodeRef.current) return;
     const frame = frameRectRef.current;
     const view = viewSizeRef.current;
     if (!frame || view.width <= 0 || view.height <= 0) return;
-    const scanned = barcodeRect(result, view);
-    if (!scanned || !isCenterInsideFrame(scanned, frame)) return;
+    if (hit.bounds) {
+      const inFrame = scaleIfNormalized(hit.bounds, { width: hit.frameWidth, height: hit.frameHeight });
+      const scanned = mapFrameRectToView(inFrame, { width: hit.frameWidth, height: hit.frameHeight }, view);
+      if (!isCenterInsideFrame(scanned, frame)) return;
+    } else if (!scanRoi) {
+      return;
+    }
     lockedRef.current = true;
     ignoredCodeRef.current = null;
     lastCodeRef.current = data;
@@ -279,14 +217,12 @@ export function BarcodeScannerModal({
           updateFrameRect();
         }}
       >
-        {!permission ? (
-          <Text style={styles.message}>Se verifică permisiunea camerei…</Text>
-        ) : !permission.granted ? (
+        {!hasPermission ? (
           <View style={styles.permissionBox}>
             <Text style={styles.message}>
-              Camera este necesară pentru scanarea codurilor de bare.
+              Camera este necesară pentru scanarea codurilor de bare și a cifrelor scrise.
             </Text>
-            {permission.canAskAgain ? (
+            {canRequestPermission ? (
               <Pressable style={styles.primary} onPress={() => void requestPermission()}>
                 <Text style={styles.primaryText}>Permite camera</Text>
               </Pressable>
@@ -301,12 +237,12 @@ export function BarcodeScannerModal({
           </View>
         ) : (
           <>
-            <CameraView
-              style={StyleSheet.absoluteFill}
-              facing="back"
-              enableTorch={torch}
-              barcodeScannerSettings={{ barcodeTypes: BARCODE_TYPES }}
-              onBarcodeScanned={phase === "idle" ? handleBarCodeScanned : undefined}
+            <LiveScanCamera
+              isActive={visible && phase !== "pick"}
+              enabled={phase === "idle"}
+              torch={torch}
+              roi={scanRoi}
+              onHit={handleLiveHit}
             />
             <View style={styles.overlay} pointerEvents="box-none">
               {phase === "pick" ? (
@@ -375,7 +311,7 @@ export function BarcodeScannerModal({
                     <View style={styles.dimSide} />
                   </View>
                   <View style={styles.dimBottom}>
-                    <Text style={styles.hintOnCamera}>Îndreaptă camera spre chenar</Text>
+                    <Text style={styles.hintOnCamera}>Îndreaptă camera spre chenar — cod de bare sau cifre</Text>
                   </View>
                 </>
               ) : (

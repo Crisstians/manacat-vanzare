@@ -2,7 +2,7 @@
   "expo": {
     "name": "Manacat Magazin",
     "slug": "manacat-vendor",
-    "version": "1.0.0",
+    "version": "1.0.5",
     "orientation": "landscape",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -14,9 +14,20 @@
       "./plugins/withAndroidScreenPinning",
       "./plugins/withApkInstaller",
       [
+        "react-native-vision-camera-mlkit",
+        {
+          "textRecognition": true,
+          "textRecognitionChinese": false,
+          "textRecognitionDevanagari": false,
+          "textRecognitionJapanese": false,
+          "textRecognitionKorean": false,
+          "barcodeScanning": true
+        }
+      ],
+      [
         "expo-camera",
         {
-          "cameraPermission": "Manacat Magazin folosește camera pentru a scana coduri de bare ale produselor.",
+          "cameraPermission": "Manacat Magazin folosește camera pentru a scana coduri de bare și cifre scrise pe produse.",
           "recordAudioAndroid": false,
           "barcodeScannerEnabled": true
         }
@@ -31,7 +42,10 @@
       ]
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Manacat Magazin folosește camera pentru a scana coduri de bare și cifre scrise pe produse."
+      }
     },
     "android": {
       "package": "ro.manacat.vanzare",
