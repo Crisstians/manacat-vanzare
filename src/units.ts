@@ -41,6 +41,37 @@ export function displayUnit(unit: string): string {
   return unit.trim();
 }
 
+export function sanitizeQuantityInput(raw: string, kind: QuantityKind): string {
+  if (kind === "piece") {
+    return raw.replace(/[^\d]/g, "");
+  }
+  let separatorSeen = false;
+  let result = "";
+  for (const ch of raw) {
+    if (ch >= "0" && ch <= "9") {
+      result += ch;
+      continue;
+    }
+    if ((ch === "." || ch === ",") && !separatorSeen) {
+      separatorSeen = true;
+      result += ch;
+    }
+  }
+  if (kind !== "area") return result;
+  const sepIndex = result.search(/[.,]/);
+  if (sepIndex < 0) return result;
+  return result.slice(0, sepIndex + 1) + result.slice(sepIndex + 1).slice(0, 2);
+}
+
+export function formatQuantityDisplay(value: number, kind: QuantityKind): string {
+  if (!Number.isFinite(value)) return "—";
+  if (kind === "area") return value.toFixed(2).replace(".", ",");
+  if (kind === "piece" || Number.isInteger(value)) {
+    return String(kind === "piece" ? Math.round(value) : value);
+  }
+  return value.toFixed(3).replace(/\.?0+$/, "").replace(".", ",");
+}
+
 export function parseQuantity(
   raw: string,
   kind: QuantityKind,
@@ -51,6 +82,13 @@ export function parseQuantity(
   }
   if (kind === "piece" && !Number.isInteger(value)) {
     return { ok: false, message: "Pentru bucăți, cantitatea trebuie să fie un număr întreg" };
+  }
+  if (kind === "area") {
+    const rounded = Math.round(value * 100) / 100;
+    if (rounded <= 0) {
+      return { ok: false, message: "Cantitate invalidă" };
+    }
+    return { ok: true, value: rounded };
   }
   return { ok: true, value };
 }

@@ -10,6 +10,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as floorApi from "../src/api/floorApi";
 import type { CatalogProduct } from "../src/api/productsApi";
 import type { FloorTicket, FloorTicketEvent, FloorTicketStatus, FloorTicketSummary } from "../src/api/types";
@@ -29,7 +30,7 @@ import {
   stockLimitMessage,
   ticketQtyForProduct,
 } from "../src/stock";
-import { displayUnit, inferUnitFromResults, parseQuantity, quantityKind } from "../src/units";
+import { displayUnit, formatQuantityDisplay, inferUnitFromResults, parseQuantity, quantityKind } from "../src/units";
 
 function newClientItemId(): string {
   return `c_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -69,6 +70,7 @@ function applyEventToList(tickets: FloorTicketSummary[], event: FloorTicketEvent
       createdAtDepartmentName: existing?.createdAtDepartmentName ?? "",
       createdAt: existing?.createdAt ?? event.at,
       updatedAt: event.at,
+      salesTotal: existing?.salesTotal ?? 0,
       lastSeq: event.seq,
     };
     return upsertBoardTicket(tickets, created);
@@ -97,6 +99,24 @@ function applyEventToList(tickets: FloorTicketSummary[], event: FloorTicketEvent
   return upsertBoardTicket(tickets, { ...existing, lastSeq: event.seq, updatedAt: event.at });
 }
 
+function snapshotMoney(value: unknown, fallback = 0): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function salesTotalFromItems(items: { lineTotalSnapshot: number }[]): number {
+  const sum = items.reduce((acc, item) => {
+    const line = Number(item.lineTotalSnapshot);
+    return acc + (Number.isFinite(line) && line > 0 ? line : 0);
+  }, 0);
+  return Math.round(sum * 100) / 100;
+}
+
+function formatLei(price: number): string {
+  if (!Number.isFinite(price) || price <= 0) return "—";
+  return `${price.toFixed(2)} lei`;
+}
+
 function applyEvent(ticket: FloorTicket, event: FloorTicketEvent): FloorTicket {
   const payload = event.payload as Record<string, unknown>;
   if (event.type === "ticket.created") {
@@ -112,43 +132,57 @@ function applyEvent(ticket: FloorTicket, event: FloorTicketEvent): FloorTicket {
     if (ticket.items.some((item) => item.id === payload.itemId || item.clientItemId === payload.clientItemId)) {
       return { ...ticket, lastSeq: event.seq };
     }
+    const items = [
+      ...ticket.items,
+      {
+        id: String(payload.itemId),
+        ticketId: ticket.id,
+        productId: Number(payload.productId),
+        sku: String(payload.sku ?? ""),
+        nameSnapshot: String(payload.nameSnapshot ?? ""),
+        quantity: Number(payload.quantity),
+        unitPriceSnapshot: snapshotMoney(payload.unitPriceSnapshot),
+        lineTotalSnapshot: snapshotMoney(payload.lineTotalSnapshot),
+        addedByStaffId: String(payload.addedByStaffId ?? ""),
+        addedByStaffName: String(payload.addedByStaffName ?? ""),
+        addedAtDepartmentId: String(payload.addedAtDepartmentId ?? ""),
+        addedAtDepartmentName: String(payload.addedAtDepartmentName ?? ""),
+        clientItemId: String(payload.clientItemId ?? ""),
+        createdAt: event.at,
+        updatedAt: event.at,
+      },
+    ];
     return {
       ...ticket,
       lastSeq: event.seq,
-      items: [
-        ...ticket.items,
-        {
-          id: String(payload.itemId),
-          ticketId: ticket.id,
-          productId: Number(payload.productId),
-          sku: String(payload.sku ?? ""),
-          nameSnapshot: String(payload.nameSnapshot ?? ""),
-          quantity: Number(payload.quantity),
-          addedByStaffId: String(payload.addedByStaffId ?? ""),
-          addedByStaffName: String(payload.addedByStaffName ?? ""),
-          addedAtDepartmentId: String(payload.addedAtDepartmentId ?? ""),
-          addedAtDepartmentName: String(payload.addedAtDepartmentName ?? ""),
-          clientItemId: String(payload.clientItemId ?? ""),
-          createdAt: event.at,
-          updatedAt: event.at,
-        },
-      ],
+      items,
+      salesTotal: salesTotalFromItems(items),
     };
   }
   if (event.type === "item.updated") {
+    const items = ticket.items.map((item) =>
+      item.id === payload.itemId
+        ? {
+            ...item,
+            quantity: Number(payload.quantity),
+            lineTotalSnapshot: snapshotMoney(payload.lineTotalSnapshot, item.lineTotalSnapshot),
+          }
+        : item,
+    );
     return {
       ...ticket,
       lastSeq: event.seq,
-      items: ticket.items.map((item) =>
-        item.id === payload.itemId ? { ...item, quantity: Number(payload.quantity) } : item,
-      ),
+      items,
+      salesTotal: salesTotalFromItems(items),
     };
   }
   if (event.type === "item.removed") {
+    const items = ticket.items.filter((item) => item.id !== payload.itemId);
     return {
       ...ticket,
       lastSeq: event.seq,
-      items: ticket.items.filter((item) => item.id !== payload.itemId),
+      items,
+      salesTotal: salesTotalFromItems(items),
     };
   }
   return { ...ticket, lastSeq: event.seq };
@@ -178,10 +212,13 @@ function addedByLabel(item: { addedByStaffName: string; addedAtDepartmentName: s
   return "";
 }
 
-function formatQty(quantity: number): string {
-  if (!Number.isFinite(quantity)) return "—";
-  if (Number.isInteger(quantity)) return String(quantity);
-  return quantity.toFixed(3).replace(/\.?0+$/, "").replace(".", ",");
+function formatQty(quantity: number, unit?: string): string {
+  const kind = unit
+    ? quantityKind(unit)
+    : Number.isInteger(quantity)
+      ? "piece"
+      : "other";
+  return formatQuantityDisplay(quantity, kind);
 }
 
 function isNumericCode(raw: string): boolean {
@@ -196,6 +233,7 @@ type PendingProduct = {
 };
 
 export default function TicketsScreen() {
+  const insets = useSafeAreaInsets();
   const { device, session } = useAuth();
   const [tickets, setTickets] = useState<FloorTicketSummary[]>([]);
   const [selected, setSelected] = useState<FloorTicket | null>(null);
@@ -318,6 +356,7 @@ export default function TicketsScreen() {
 
     const appState = AppState.addEventListener("change", (next) => {
       if (next !== "active") return;
+      ticketSocket.resume();
       void loadList().catch(handleLoadError);
       void refreshOpenTicket();
     });
@@ -524,10 +563,17 @@ export default function TicketsScreen() {
 
   const startEditQuantity = (item: FloorTicket["items"][number]) => {
     if (!selected || !canEditItems(selected.status)) return;
+    const knownUnit = unitByProductId[item.productId];
+    const initialUnit = knownUnit ?? (Number.isInteger(item.quantity) ? "buc" : null);
+    const initialKind = initialUnit
+      ? quantityKind(initialUnit)
+      : Number.isInteger(item.quantity)
+        ? "piece"
+        : "other";
     setError(null);
     setEditingItemId(item.id);
-    setEditQty(String(item.quantity));
-    setEditUnit("buc");
+    setEditQty(formatQuantityDisplay(item.quantity, initialKind));
+    setEditUnit(initialUnit);
     setEditRemaining(null);
     setEditOtherStores([]);
     void floorApi
@@ -535,6 +581,9 @@ export default function TicketsScreen() {
       .then((looked) => {
         setEditUnit(looked.unit);
         rememberUnit(item.productId, looked.unit);
+        if (quantityKind(looked.unit) !== initialKind) {
+          setEditQty(formatQuantityDisplay(item.quantity, quantityKind(looked.unit)));
+        }
         setEditRemaining(
           remainingStock(looked.storeStock, ticketQtyForProduct(selected.items, item.productId, item.id)),
         );
@@ -615,9 +664,22 @@ export default function TicketsScreen() {
     () => `${device?.departmentName ?? ""} · ${session?.staff.name ?? ""}`,
     [device?.departmentName, session?.staff.name],
   );
+  const ticketTotal = useMemo(
+    () => (selected ? salesTotalFromItems(selected.items) : 0),
+    [selected],
+  );
 
   return (
-    <View style={styles.screen}>
+    <View
+      style={[
+        styles.screen,
+        {
+          paddingBottom: insets.bottom,
+          paddingLeft: insets.left,
+          paddingRight: insets.right,
+        },
+      ]}
+    >
       <Stack.Screen
         options={{
           title: subtitle,
@@ -630,7 +692,15 @@ export default function TicketsScreen() {
             <Text style={styles.paneTitle}>Bilete deschise</Text>
             <ConnectionPill connected={connected} />
           </View>
-          <Button label="Bilet nou" onPress={() => void create()} disabled={busy} />
+          <Button
+            label="Bilet nou"
+            onPress={() => void create()}
+            disabled={busy}
+            loading={busy}
+          />
+          {error && !selected ? (
+            <StatusBanner message={error} onDismiss={() => setError(null)} />
+          ) : null}
           <FlatList
             data={tickets}
             keyExtractor={(item) => item.id}
@@ -686,6 +756,15 @@ export default function TicketsScreen() {
             <>
               <View style={styles.detailHeader}>
                 <Text style={styles.huge}>Bilet {selected.displayNumber}</Text>
+                <TextInput
+                  style={styles.customerInput}
+                  value={customerName}
+                  onChangeText={setCustomerName}
+                  placeholder="Nume client — opțional"
+                  placeholderTextColor={colors.muted}
+                  editable={isBoardTicket(selected.status)}
+                  onEndEditing={() => void saveName()}
+                />
                 {isEmpty && !locked ? (
                   <Button
                     variant="danger"
@@ -696,17 +775,6 @@ export default function TicketsScreen() {
                 ) : null}
               </View>
 
-              <Text style={styles.fieldLabel}>Nume client — opțional</Text>
-              <TextInput
-                style={styles.input}
-                value={customerName}
-                onChangeText={setCustomerName}
-                placeholder="ex. Popescu"
-                placeholderTextColor={colors.muted}
-                editable={isBoardTicket(selected.status)}
-                onEndEditing={() => void saveName()}
-              />
-
               {atCheckout ? (
                 <StatusBanner
                   tone="info"
@@ -716,52 +784,30 @@ export default function TicketsScreen() {
 
               {!locked ? (
                 <View style={styles.addCard}>
-                  <Text style={styles.sectionTitle}>Adaugă produs</Text>
-                  <CatalogProductSearch
-                    query={code}
-                    onQueryChange={handleQueryChange}
-                    onSelect={selectFromCatalog}
-                    onResultsChange={handleResultsChange}
-                    disabled={busy}
-                    storeId={session?.staff.storeId ?? device?.storeId}
-                    selectedProductId={pendingProduct?.productId}
-                  >
-                    <Button
-                      variant="secondary"
-                      label="Scanare"
-                      disabled={busy}
-                      onPress={() => setScannerOpen(true)}
-                    />
-                  </CatalogProductSearch>
-                  {pendingProduct ? (
-                    <View style={styles.pendingRow}>
-                      <Text style={styles.pendingName} numberOfLines={2}>
-                        {pendingProduct.name}
-                      </Text>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="Schimbă produsul"
-                        onPress={() => {
-                          setPendingProduct(null);
-                          setCode("");
-                          setQtyUnit(null);
-                        }}
-                        style={({ pressed }) => [styles.pendingClear, pressed && { opacity: pressedOpacity }]}
+                  <View style={styles.addRow}>
+                    <View style={styles.addSearch}>
+                      <CatalogProductSearch
+                        query={code}
+                        onQueryChange={handleQueryChange}
+                        onSelect={selectFromCatalog}
+                        onResultsChange={handleResultsChange}
+                        disabled={busy}
+                        storeId={session?.staff.storeId ?? device?.storeId}
+                        selectedProductId={pendingProduct?.productId}
                       >
-                        <Text style={styles.pendingClearText}>Schimbă</Text>
-                      </Pressable>
+                        <Button
+                          variant="secondary"
+                          label="Scanare"
+                          disabled={busy}
+                          onPress={() => setScannerOpen(true)}
+                        />
+                      </CatalogProductSearch>
                     </View>
-                  ) : (
-                    <Text style={styles.stockHint}>
-                      Alege un produs din listă sau scanează, apoi apasă „Adaugă”.
-                    </Text>
-                  )}
-                  <View style={styles.addActions}>
                     <QuantityStepper
                       value={qty}
                       onChange={(value) => {
                         if (qtyKind === "piece") {
-                          setQty(value.replace(/[^\d]/g, "") || "1");
+                          setQty(value.replace(/[^\d]/g, ""));
                           return;
                         }
                         setQty(value);
@@ -778,14 +824,31 @@ export default function TicketsScreen() {
                       style={styles.addButton}
                     />
                   </View>
-                  <Text style={styles.stockHint}>
-                    Cantitatea e limitată la stocul acestui magazin, inclusiv ce e deja pe biletele deschise.
-                  </Text>
+                  {pendingProduct ? (
+                    <View style={styles.pendingRow}>
+                      <Text style={styles.pendingName} numberOfLines={1}>
+                        {pendingProduct.name}
+                      </Text>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Schimbă produsul"
+                        onPress={() => {
+                          setPendingProduct(null);
+                          setCode("");
+                          setQtyUnit(null);
+                        }}
+                        style={({ pressed }) => [styles.pendingClear, pressed && { opacity: pressedOpacity }]}
+                      >
+                        <Text style={styles.pendingClearText}>Schimbă</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
                 </View>
               ) : null}
 
               {error ? <StatusBanner message={error} onDismiss={() => setError(null)} /> : null}
 
+              <View style={styles.linesBlock}>
               <Text style={styles.sectionTitle}>
                 {selected.items.length === 0
                   ? "Produse pe bilet"
@@ -808,13 +871,28 @@ export default function TicketsScreen() {
                   const editing = editingItemId === item.id;
                   const unit = unitByProductId[item.productId];
                   const qtyLabel = unit
-                    ? `${formatQty(item.quantity)} ${displayUnit(unit)}`
+                    ? `${formatQty(item.quantity, unit)} ${displayUnit(unit)}`
                     : formatQty(item.quantity);
+                  const unitPriceLabel =
+                    item.unitPriceSnapshot > 0
+                      ? `${formatLei(item.unitPriceSnapshot)}${unit ? `/${displayUnit(unit)}` : ""}`
+                      : "";
+                  const lineTotalLabel =
+                    item.lineTotalSnapshot > 0 ? formatLei(item.lineTotalSnapshot) : "";
+                  const qtyBlock = (
+                    <>
+                      <Text style={styles.lineQty}>{qtyLabel}</Text>
+                      {lineTotalLabel ? <Text style={styles.lineTotal}>{lineTotalLabel}</Text> : null}
+                    </>
+                  );
                   return (
                   <View style={[styles.line, justAddedId === item.id && styles.lineAdded]}>
                     <View style={styles.lineMain}>
                       <View style={styles.lineBody}>
                         <Text style={styles.lineName}>{item.nameSnapshot}</Text>
+                        {unitPriceLabel ? (
+                          <Text style={styles.lineUnitPrice}>{unitPriceLabel}</Text>
+                        ) : null}
                         {addedBy ? <Text style={styles.lineMeta}>{addedBy}</Text> : null}
                       </View>
                       {!editing ? (
@@ -826,14 +904,14 @@ export default function TicketsScreen() {
                           onPress={() => startEditQuantity(item)}
                           android_ripple={{ color: "rgba(0,0,0,0.08)" }}
                           style={({ pressed }) => [
-                            styles.qtyTap,
+                            styles.lineMetrics,
                             pressed && { opacity: pressedOpacity },
                           ]}
                         >
-                          <Text style={styles.lineQty}>{qtyLabel}</Text>
+                          {qtyBlock}
                         </Pressable>
                         ) : (
-                        <Text style={styles.lineQty}>{qtyLabel}</Text>
+                        <View style={styles.lineMetrics}>{qtyBlock}</View>
                         )
                       ) : null}
                       {!locked && !editing ? (
@@ -858,7 +936,7 @@ export default function TicketsScreen() {
                           value={editQty}
                           onChange={(value) => {
                             if (editQtyKind === "piece") {
-                              setEditQty(value.replace(/[^\d]/g, "") || "1");
+                              setEditQty(value.replace(/[^\d]/g, ""));
                               return;
                             }
                             setEditQty(value);
@@ -886,6 +964,13 @@ export default function TicketsScreen() {
                   );
                 }}
               />
+              {!isEmpty ? (
+                <View style={styles.ticketTotal}>
+                  <Text style={styles.ticketTotalLabel}>Total bilet</Text>
+                  <Text style={styles.ticketTotalValue}>{formatLei(ticketTotal)}</Text>
+                </View>
+              ) : null}
+              </View>
             </>
           )}
         </View>
@@ -913,7 +998,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.panel,
     gap: 12,
   },
-  detailPane: { flex: 1, padding: 20, gap: 12 },
+  detailPane: { flex: 1, padding: 16, gap: 10, minHeight: 0 },
   listHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -971,29 +1056,38 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
   },
-  huge: { color: colors.text, fontSize: typeScale.ticket, fontWeight: "800", flex: 1 },
-  fieldLabel: {
+  huge: { color: colors.text, fontSize: 28, fontWeight: "800", flexShrink: 0 },
+  customerInput: {
+    flex: 1,
+    minWidth: 180,
+    minHeight: touchMin,
+    backgroundColor: colors.bg,
+    borderColor: colors.border,
+    borderWidth: 1.5,
+    borderRadius: radius,
     color: colors.text,
-    fontSize: 16,
-    fontWeight: "700",
-    marginBottom: -4,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: typeScale.body,
   },
   addCard: {
     backgroundColor: colors.panel,
     borderRadius: radius,
     borderWidth: 1.5,
     borderColor: colors.border,
-    padding: 16,
-    gap: 12,
+    padding: 10,
+    gap: 8,
+    zIndex: 2,
   },
-  sectionTitle: { color: colors.text, fontSize: typeScale.title, fontWeight: "800" },
-  addActions: {
+  addRow: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    flexWrap: "wrap",
+    alignItems: "flex-start",
+    gap: 10,
   },
-  addButton: { flexGrow: 1, minWidth: 160 },
+  addSearch: { flex: 1, minWidth: 0 },
+  sectionTitle: { color: colors.text, fontSize: typeScale.title, fontWeight: "800" },
+  linesBlock: { flex: 1, minHeight: 0, gap: 8 },
+  addButton: { minWidth: 140 },
   pendingRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -1022,19 +1116,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "800",
   },
-  stockHint: { color: colors.muted, fontSize: 15, fontWeight: "600", lineHeight: 22 },
-  input: {
-    minHeight: touchMin,
-    backgroundColor: colors.panel,
-    borderColor: colors.border,
-    borderWidth: 1.5,
-    borderRadius: radius,
-    color: colors.text,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    fontSize: typeScale.body,
-  },
-  lineList: { gap: 8, paddingBottom: 16, flexGrow: 1 },
+  lineList: { gap: 8, paddingBottom: 8, flexGrow: 1 },
   line: {
     backgroundColor: colors.panel,
     borderRadius: radius,
@@ -1055,18 +1137,35 @@ const styles = StyleSheet.create({
   },
   lineBody: { flex: 1, minWidth: 0 },
   lineName: { color: colors.text, fontSize: typeScale.body, fontWeight: "800" },
+  lineUnitPrice: { color: colors.muted, fontSize: 15, fontWeight: "700", marginTop: 2 },
   lineMeta: { color: colors.muted, fontSize: 15, marginTop: 2 },
   lineQty: { color: colors.accent, fontSize: 22, fontWeight: "800" },
-  qtyTap: {
+  lineTotal: { color: colors.text, fontSize: typeScale.body, fontWeight: "800", marginTop: 2 },
+  lineMetrics: {
+    flexShrink: 0,
+    minWidth: 110,
     minHeight: touchMin,
-    minWidth: touchMin,
     paddingHorizontal: 10,
     justifyContent: "center",
     alignItems: "flex-end",
     borderRadius: radius,
-    overflow: "hidden",
   },
+  ticketTotal: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: colors.panel,
+    borderRadius: radius,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    minHeight: touchMin,
+  },
+  ticketTotalLabel: { color: colors.text, fontSize: typeScale.title, fontWeight: "800" },
+  ticketTotalValue: { color: colors.accent, fontSize: typeScale.lead, fontWeight: "800" },
   lineDelete: {
+    flexShrink: 0,
     minHeight: touchMin,
     justifyContent: "center",
     paddingHorizontal: 8,

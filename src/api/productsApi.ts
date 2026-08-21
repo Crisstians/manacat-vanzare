@@ -1,4 +1,4 @@
-import { apiUrl } from "../config";
+import { getJson } from "./client";
 
 export type CatalogProduct = {
   productId: number;
@@ -10,7 +10,7 @@ export type CatalogProduct = {
   price: number;
   image: string;
   images: string[];
-  stockByStore?: { storeId: string; storeName?: string; quantity: number }[];
+  stockByStore?: { storeId: string; storeName?: string; quantity: number; price?: number; priceExVat?: number }[];
 };
 
 export type ListProductsResponse = {
@@ -26,17 +26,6 @@ type SearchProductsOptions = {
   signal?: AbortSignal;
 };
 
-type ApiErrorBody = { error?: string; code?: string };
-
-async function parseError(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as ApiErrorBody;
-    return body.error ?? "Cererea a eșuat.";
-  } catch {
-    return "Cererea a eșuat.";
-  }
-}
-
 export async function searchProducts(
   q: string,
   options: SearchProductsOptions = {},
@@ -47,14 +36,7 @@ export async function searchProducts(
     limit: String(options.limit ?? 20),
   });
 
-  const response = await fetch(apiUrl(`/products?${params.toString()}`), {
-    method: "GET",
+  return getJson<ListProductsResponse>(`/floor/products?${params.toString()}`, {
     signal: options.signal,
   });
-
-  if (!response.ok) {
-    throw new Error(await parseError(response));
-  }
-
-  return (await response.json()) as ListProductsResponse;
 }

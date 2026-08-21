@@ -4,10 +4,12 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
-import { configureAuth, setAuthTokens } from "../api/client";
+import { AppState } from "react-native";
+import { ApiError, configureAuth, isTimeoutError, refreshAuth, setAuthTokens } from "../api/client";
 import * as floorApi from "../api/floorApi";
 import type { AuthSession, DeviceConfig } from "../api/types";
 import {
@@ -35,6 +37,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<Status>("loading");
   const [device, setDevice] = useState<DeviceConfig | null>(null);
   const [session, setSession] = useState<AuthSession | null>(null);
+  const sessionRef = useRef(session);
+  const lastWakeRefreshRef = useRef(Date.now());
+  sessionRef.current = session;
 
   const applySession = useCallback(async (next: AuthSession | null) => {
     if (next) {
@@ -85,14 +90,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const refreshed = await floorApi.refreshSession(storedSession.refreshToken);
         if (cancelled) return;
         await applySession(refreshed);
-      } catch {
+      } catch (error) {
         if (cancelled) return;
+        if (isTimeoutError(error)) {
+          await applySession(storedSession);
+          return;
+        }
         await applySession(null);
       }
     };
     void boot();
     return () => {
       cancelled = true;
+    };
+  }, [applySession]);
+
+  useEffect(() => {
+    const refreshIfAlive = () => {
+      if (!sessionRef.current?.refreshToken) return;
+      lastWakeRefreshRef.current = Date.now();
+      void refreshAuth().catch((error: unknown) => {
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+          void applySession(null);
+        }
+      });
+    };
+
+    const interval = setInterval(() => {
+      if (AppState.currentState !== "active") return;
+      refreshIfAlive();
+    }, 10 * 60 * 1000);
+
+    const appState = AppState.addEventListener("change", (next) => {
+      if (next !== "active") return;
+      if (!sessionRef.current?.refreshToken) return;
+      if (Date.now() - lastWakeRefreshRef.current < 30_000) return;
+      refreshIfAlive();
+    });
+    return () => {
+      clearInterval(interval);
+      appState.remove();
     };
   }, [applySession]);
 

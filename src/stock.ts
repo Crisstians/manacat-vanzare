@@ -1,14 +1,27 @@
-import { displayUnit } from "./units";
+import { displayUnit, formatQuantityDisplay, quantityKind } from "./units";
 
 export type StoreStockLine = {
   storeId: string;
   storeName?: string;
   quantity: number;
+  price?: number;
+  priceExVat?: number;
 };
 
 export function stockAtStore(stockByStore: StoreStockLine[] | undefined, storeId: string): number {
   if (!stockByStore || !storeId) return 0;
   return stockByStore.find((row) => row.storeId === storeId)?.quantity ?? 0;
+}
+
+export function priceAtStore(
+  stockByStore: StoreStockLine[] | undefined,
+  storeId: string,
+  fallback: number,
+): number {
+  if (!stockByStore || !storeId) return fallback;
+  const price = stockByStore.find((row) => row.storeId === storeId)?.price;
+  if (typeof price === "number" && Number.isFinite(price) && price > 0) return price;
+  return fallback;
 }
 
 export function otherStoreNamesWithStock(
@@ -49,8 +62,8 @@ export function remainingStock(storeStock: number, alreadyCommitted: number): nu
 }
 
 export function formatStockAmount(value: number, unit?: string): string {
-  const rounded = Math.round(value * 1000) / 1000;
-  const amount = Number.isInteger(rounded) ? String(rounded) : String(rounded);
+  const kind = unit ? quantityKind(unit) : "other";
+  const amount = formatQuantityDisplay(value, kind);
   const suffix = unit?.trim() ? ` ${displayUnit(unit)}` : "";
   return `${amount}${suffix}`;
 }

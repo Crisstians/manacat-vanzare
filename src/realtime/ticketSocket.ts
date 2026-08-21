@@ -29,6 +29,7 @@ export class TicketSocket {
       reconnection: true,
       reconnectionDelay: 300,
       reconnectionDelayMax: 8000,
+      timeout: 10000,
     });
 
     this.socket.on("connect", () => {
@@ -45,6 +46,17 @@ export class TicketSocket {
     this.socket.on("ticket.event", (event: FloorTicketEvent) => {
       this.enqueue(() => this.handleEvent(event));
     });
+  }
+
+  resume() {
+    const socket = this.socket;
+    if (!socket) return;
+    if (socket.disconnected) {
+      socket.connect();
+      return;
+    }
+    socket.disconnect();
+    socket.connect();
   }
 
   setTicket(ticketId: string | null, lastSeq = 0) {

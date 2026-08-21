@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { searchProducts, type CatalogProduct } from "../api/productsApi";
 import { apiOrigin } from "../config";
-import { formatStockAmount, otherStockHint, otherStoreNamesWithStock, stockAtStore } from "../stock";
+import { formatStockAmount, otherStockHint, otherStoreNamesWithStock, priceAtStore, stockAtStore } from "../stock";
 import { colors, pressedOpacity, radius, touchMin, typeScale } from "../theme";
 import { displayUnit } from "../units";
 
@@ -121,6 +121,7 @@ export function CatalogProductSearch({
         })
         .catch((err: unknown) => {
           if (controller.signal.aborted) return;
+          if (err instanceof Error && err.name === "AbortError") return;
           setError(err instanceof Error ? err.message : "Căutarea a eșuat.");
           setItems([]);
           setSearched(true);
@@ -179,6 +180,7 @@ export function CatalogProductSearch({
             const title = catalogDisplayName(item);
             const thumb = catalogPrimaryImage(item);
             const storeStock = storeId ? stockAtStore(item.stockByStore, storeId) : null;
+            const displayPrice = storeId ? priceAtStore(item.stockByStore, storeId, item.price) : item.price;
             const outOfStock = storeStock != null && storeStock <= 0;
             const elsewhere =
               outOfStock && storeId ? otherStockHint(otherStoreNamesWithStock(item.stockByStore, storeId)) : "";
@@ -237,7 +239,7 @@ export function CatalogProductSearch({
                   ) : null}
                 </View>
                 <Text style={styles.resultPrice}>
-                  {formatPrice(item.price)}
+                  {formatPrice(displayPrice)}
                   {item.unit ? `/${displayUnit(item.unit)}` : ""}
                 </Text>
               </Pressable>

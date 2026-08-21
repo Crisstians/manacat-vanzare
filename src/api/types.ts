@@ -34,6 +34,8 @@ export type FloorTicketItem = {
   sku: string;
   nameSnapshot: string;
   quantity: number;
+  unitPriceSnapshot: number;
+  lineTotalSnapshot: number;
   addedByStaffId: string;
   addedByStaffName: string;
   addedAtDepartmentId: string;
@@ -56,6 +58,7 @@ export type FloorTicket = {
   createdAtDepartmentName: string;
   createdAt: string;
   updatedAt: string;
+  salesTotal: number;
   items: FloorTicketItem[];
   lastSeq: number;
 };
@@ -77,6 +80,7 @@ export type ProductLookup = {
   sku: string;
   name: string;
   unit: string;
+  price: number;
   storeStock: number;
   otherStoreNames?: string[];
 };

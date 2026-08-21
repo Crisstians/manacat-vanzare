@@ -1,6 +1,11 @@
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { colors, pressedOpacity, radius, touchMin, typeScale } from "../theme";
-import type { QuantityKind } from "../units";
+import {
+  formatQuantityDisplay,
+  parseQuantity,
+  sanitizeQuantityInput,
+  type QuantityKind,
+} from "../units";
 
 type QuantityStepperProps = {
   value: string;
@@ -29,6 +34,12 @@ export function QuantityStepper({
     onChange(String(Math.min(ceiling, Math.max(1, next))));
   };
 
+  const commitArea = () => {
+    const parsed = parseQuantity(value, "area");
+    if (!parsed.ok) return;
+    onChange(formatQuantityDisplay(parsed.value, "area"));
+  };
+
   if (isPiece) {
     const current = Math.floor(Number(value.replace(",", ".")));
     const plusDisabled =
@@ -49,7 +60,17 @@ export function QuantityStepper({
         >
           <Text style={styles.stepBtnText}>−</Text>
         </Pressable>
-        <Text style={styles.stepValue}>{value || "1"}</Text>
+        <TextInput
+          style={styles.stepInput}
+          value={value}
+          onChangeText={(next) => onChange(sanitizeQuantityInput(next, "piece"))}
+          placeholder="1"
+          placeholderTextColor={colors.muted}
+          keyboardType="number-pad"
+          selectTextOnFocus
+          editable={!disabled}
+          accessibilityLabel="Cantitate"
+        />
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Crește cantitatea"
@@ -74,7 +95,8 @@ export function QuantityStepper({
       <TextInput
         style={styles.input}
         value={value}
-        onChangeText={(next) => onChange(next.replace(/[^\d.,]/g, ""))}
+        onChangeText={(next) => onChange(sanitizeQuantityInput(next, kind))}
+        onBlur={kind === "area" ? commitArea : undefined}
         placeholder={unitLabel || "Cant"}
         placeholderTextColor={colors.muted}
         keyboardType="decimal-pad"
@@ -109,12 +131,14 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     lineHeight: 32,
   },
-  stepValue: {
-    minWidth: 44,
+  stepInput: {
+    minWidth: 72,
+    minHeight: touchMin,
     textAlign: "center",
     color: colors.text,
     fontSize: 24,
     fontWeight: "800",
+    padding: 0,
   },
   field: {
     minHeight: touchMin,

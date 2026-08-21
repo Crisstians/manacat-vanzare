@@ -1,4 +1,4 @@
-import { deleteJson, getJson, getPublicJson, patchJson, postJson } from "./client";
+import { deleteJson, getJson, getPublicJson, patchJson, postJson, postPublicJson } from "./client";
 import type {
   AuthSession,
   Department,
@@ -34,29 +34,15 @@ export async function login(input: {
   staffId: string;
   pin: string;
 }): Promise<AuthSession> {
-  return getPublicJsonCall("/floor/auth/login", input);
-}
-
-async function getPublicJsonCall<T>(path: string, body: unknown): Promise<T> {
-  const { apiUrl } = await import("../config");
-  const response = await fetch(apiUrl(path), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const json = (await response.json()) as { data?: T; error?: string };
-  if (!response.ok) {
-    throw new Error(json.error ?? "Cererea a eșuat.");
-  }
-  return json.data as T;
+  return postPublicJson<AuthSession>("/floor/auth/login", input);
 }
 
 export async function refreshSession(refreshToken: string): Promise<AuthSession> {
-  return getPublicJsonCall("/floor/auth/refresh", { refreshToken });
+  return postPublicJson<AuthSession>("/floor/auth/refresh", { refreshToken });
 }
 
 export async function logout(refreshToken: string): Promise<void> {
-  await getPublicJsonCall("/floor/auth/logout", { refreshToken });
+  await postPublicJson("/floor/auth/logout", { refreshToken });
 }
 
 export async function listTickets(): Promise<FloorTicketSummary[]> {

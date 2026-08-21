@@ -220,7 +220,7 @@ export function BarcodeScannerModal({
         {!hasPermission ? (
           <View style={styles.permissionBox}>
             <Text style={styles.message}>
-              Camera este necesară pentru scanarea codurilor de bare și a cifrelor scrise.
+              Camera este necesară pentru scanarea codurilor de bare.
             </Text>
             {canRequestPermission ? (
               <Pressable style={styles.primary} onPress={() => void requestPermission()}>
@@ -241,7 +241,6 @@ export function BarcodeScannerModal({
               isActive={visible && phase !== "pick"}
               enabled={phase === "idle"}
               torch={torch}
-              roi={scanRoi}
               onHit={handleLiveHit}
             />
             <View style={styles.overlay} pointerEvents="box-none">
@@ -311,7 +310,7 @@ export function BarcodeScannerModal({
                     <View style={styles.dimSide} />
                   </View>
                   <View style={styles.dimBottom}>
-                    <Text style={styles.hintOnCamera}>Îndreaptă camera spre chenar — cod de bare sau cifre</Text>
+                    <Text style={styles.hintOnCamera}>Îndreaptă camera spre chenar — cod de bare</Text>
                   </View>
                 </>
               ) : (
