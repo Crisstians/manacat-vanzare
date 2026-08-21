@@ -21,10 +21,11 @@ export default function ScanLinksScreen() {
         }}
       />
       <View style={styles.body}>
-        <Text style={styles.lead}>Leagă un cod de ambalaj de un produs</Text>
+        <Text style={styles.lead}>Leagă coduri de ambalaj de un produs</Text>
         <Text style={styles.detail}>
-          Scanează un EAN sau QR necunoscut, caută produsul din catalog și confirmă asocierea. ID-ul intern
-          și SKU-ul rămân neschimbate.
+          Scanează un EAN sau QR necunoscut, caută produsul din catalog și confirmă. Poți adăuga oricâte
+          coduri pe același produs (ex. vopsele pe culori) — asocierea nouă nu înlocuiește cele vechi. ID-ul
+          intern și SKU-ul rămân neschimbate.
         </Text>
         <Button label="Scanează" onPress={() => setScannerOpen(true)} />
       </View>

@@ -7,6 +7,7 @@ import type {
   FloorTicketStatus,
   FloorTicketSummary,
   ProductLookup,
+  ProductScanLinks,
   PublicStaff,
   StockInboundReport,
   Store,
@@ -94,6 +95,22 @@ export async function lookupProduct(code: string): Promise<ProductLookup> {
 
 export async function createScanLink(code: string, productId: number): Promise<ProductLookup> {
   return postJson<ProductLookup>("/floor/products/scan-links", { code, productId });
+}
+
+export async function listProductScanLinks(productId: number): Promise<ProductScanLinks> {
+  return getJson<ProductScanLinks>(`/floor/products/${productId}/scan-links`);
+}
+
+export async function deleteScanLink(code: string): Promise<{
+  productId: number;
+  deletedCode: string;
+  scanCodes: string[];
+}> {
+  return deleteJson<{
+    productId: number;
+    deletedCode: string;
+    scanCodes: string[];
+  }>(`/floor/products/scan-links/${encodeURIComponent(code)}`);
 }
 
 export async function listStockInbound(): Promise<StockInboundReport> {

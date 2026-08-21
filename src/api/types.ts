@@ -83,6 +83,15 @@ export type ProductLookup = {
   price: number;
   storeStock: number;
   otherStoreNames?: string[];
+  /** Toate codurile de scan asociate cu produsul (API aditiv). */
+  scanCodes?: string[];
+  /** Codul tocmai asociat (doar la create scan-link). */
+  linkedCode?: string;
+};
+
+export type ProductScanLinks = {
+  productId: number;
+  scanCodes: string[];
 };
 
 export type StockInboundItem = {

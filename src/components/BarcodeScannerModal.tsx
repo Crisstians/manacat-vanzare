@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAudioPlayer, setAudioModeAsync } from "expo-audio";
 import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { isNotFoundError } from "../api/client";
+import * as floorApi from "../api/floorApi";
 import type { CatalogProduct } from "../api/productsApi";
 import { isCenterInsideFrame, mapFrameRectToView, normalizedRoi, roisEqual, scaleIfNormalized, type Rect, type Size } from "../scan/scanGeometry";
 import { useScanCameraPermission } from "../scan/useScanCameraPermission";
@@ -19,7 +20,15 @@ export type ScannedBarcodeProduct = {
   code: string;
   name: string;
   unit: string;
+  scanCodes?: string[];
+  linkedCode?: string;
 };
+
+function formatScanCodesList(codes: string[]): string {
+  if (codes.length === 0) return "";
+  if (codes.length <= 4) return codes.join(", ");
+  return `${codes.slice(0, 3).join(", ")} și încă ${codes.length - 3}`;
+}
 
 type ScanPhase =
   | "idle"
@@ -61,6 +70,7 @@ export function BarcodeScannerModal({
   const [unknownCode, setUnknownCode] = useState<string | null>(null);
   const [pickQuery, setPickQuery] = useState("");
   const [pendingLink, setPendingLink] = useState<CatalogProduct | null>(null);
+  const [existingScanCodes, setExistingScanCodes] = useState<string[]>([]);
   const [justLinked, setJustLinked] = useState(false);
   const lockedRef = useRef(false);
   const ignoredCodeRef = useRef<string | null>(null);
@@ -104,6 +114,7 @@ export function BarcodeScannerModal({
     setUnknownCode(null);
     setPickQuery("");
     setPendingLink(null);
+    setExistingScanCodes([]);
     setJustLinked(false);
   };
 
@@ -186,6 +197,18 @@ export function BarcodeScannerModal({
     resetScan();
   };
 
+  const selectProductForLink = async (item: CatalogProduct) => {
+    setPendingLink(item);
+    setExistingScanCodes([]);
+    setPhase("linkConfirm");
+    try {
+      const links = await floorApi.listProductScanLinks(item.productId);
+      setExistingScanCodes(links.scanCodes);
+    } catch {
+      setExistingScanCodes([]);
+    }
+  };
+
   const confirmUnknownLink = async () => {
     if (!unknownCode || !pendingLink) return;
     const requestId = requestIdRef.current;
@@ -195,6 +218,7 @@ export function BarcodeScannerModal({
       if (requestIdRef.current !== requestId) return;
       setProduct(looked);
       setPendingLink(null);
+      setExistingScanCodes(looked.scanCodes ?? []);
       setJustLinked(true);
       setPhase("confirm");
     } catch (err) {
@@ -254,6 +278,7 @@ export function BarcodeScannerModal({
                       style={({ pressed }) => [styles.ghostDark, pressed && { opacity: pressedOpacity }]}
                       onPress={() => {
                         setPendingLink(null);
+                        setExistingScanCodes([]);
                         setPhase("unknown");
                       }}
                     >
@@ -267,14 +292,13 @@ export function BarcodeScannerModal({
                     </Pressable>
                   </View>
                   <Text style={styles.pickerTitle}>
-                    Asociază codul {unknownCode} cu un produs
+                    Adaugă codul {unknownCode} la un produs
                   </Text>
                   <CatalogProductSearch
                     query={pickQuery}
                     onQueryChange={setPickQuery}
                     onSelect={(item) => {
-                      setPendingLink(item);
-                      setPhase("linkConfirm");
+                      void selectProductForLink(item);
                     }}
                     storeId={storeId}
                     resultsFill
@@ -377,20 +401,32 @@ export function BarcodeScannerModal({
                         {phase === "linkConfirm" && unknownCode && pendingLink ? (
                           <>
                             <Text style={styles.promptText}>
-                              Asociezi codul {unknownCode} cu {catalogDisplayName(pendingLink)}?
+                              Adaugi codul {unknownCode} la {catalogDisplayName(pendingLink)}?
                             </Text>
+                            {existingScanCodes.length > 0 ? (
+                              <Text style={styles.promptSubtext}>
+                                Produsul are deja {existingScanCodes.length}{" "}
+                                {existingScanCodes.length === 1 ? "cod" : "coduri"}:{" "}
+                                {formatScanCodesList(existingScanCodes)}. Codul nou se adaugă, nu înlocuiește.
+                              </Text>
+                            ) : (
+                              <Text style={styles.promptSubtext}>
+                                Poți asocia oricâte coduri de ambalaj la același produs.
+                              </Text>
+                            )}
                             <View style={styles.promptActions}>
                               <Button
                                 label="Nu"
                                 variant="secondary"
                                 onPress={() => {
                                   setPendingLink(null);
+                                  setExistingScanCodes([]);
                                   setPhase("pick");
                                 }}
                                 style={styles.promptButton}
                               />
                               <Button
-                                label="Da"
+                                label="Adaugă"
                                 onPress={() => void confirmUnknownLink()}
                                 style={styles.promptButton}
                               />
@@ -421,11 +457,17 @@ export function BarcodeScannerModal({
                           <>
                             <Text style={styles.promptText}>
                               {justLinked
-                                ? `Codul a fost asociat cu ${product.name}.`
+                                ? `Codul ${product.linkedCode ?? product.code} a fost adăugat la ${product.name}.`
                                 : `Produsul ${product.name} e deja identificat.`}
                             </Text>
+                            {(product.scanCodes?.length ?? 0) > 0 ? (
+                              <Text style={styles.promptSubtext}>
+                                Coduri asociate ({product.scanCodes!.length}):{" "}
+                                {formatScanCodesList(product.scanCodes!)}
+                              </Text>
+                            ) : null}
                             <Button
-                              label="Scanează din nou"
+                              label="Mai asociază un cod"
                               variant="secondary"
                               onPress={resumeScanning}
                             />

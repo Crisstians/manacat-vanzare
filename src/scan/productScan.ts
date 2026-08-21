@@ -15,7 +15,12 @@ export async function resolveScannedProduct(raw: string): Promise<ScannedBarcode
     try {
       const looked = await floorApi.lookupProduct(candidate);
       const name = looked.name.trim() || looked.sku.trim() || candidate;
-      return { code: candidate, name, unit: looked.unit };
+      return {
+        code: candidate,
+        name,
+        unit: looked.unit,
+        scanCodes: looked.scanCodes ?? [],
+      };
     } catch (err) {
       lastError = err;
     }
@@ -29,5 +34,11 @@ export async function linkUnknownScannedCode(
 ): Promise<ScannedBarcodeProduct> {
   const looked = await floorApi.createScanLink(code, productId);
   const name = looked.name.trim() || looked.sku.trim() || code;
-  return { code, name, unit: looked.unit };
+  return {
+    code,
+    name,
+    unit: looked.unit,
+    scanCodes: looked.scanCodes ?? [code],
+    linkedCode: looked.linkedCode ?? code,
+  };
 }
